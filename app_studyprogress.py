@@ -87,20 +87,46 @@ def load_data():
 
     id_col = columns.index("ID") + 1
     changed = False
+    active_records = []
+
     for sheet_row, record in enumerate(records, start=2):
+        # Ignora linhas vazias da planilha, mesmo que tenham recebido um ID anteriormente.
+        is_empty = not any(
+            str(record.get(col, "")).strip()
+            for col in ["Data", "Matéria", "Conteúdo"]
+        )
+        if is_empty:
+            continue
+
         if not str(record.get("ID", "")).strip():
             record_id = new_id()
             worksheet.update_cell(sheet_row, id_col, record_id)
+            record["ID"] = record_id
             changed = True
+
+        record["_sheet_row"] = sheet_row
+        active_records.append(record)
+
+    if not active_records:
+        return pd.DataFrame(columns=columns + ["_sheet_row"])
+
     if changed:
         records = worksheet.get_all_records()
+        active_records = []
+        for sheet_row, record in enumerate(records, start=2):
+            is_empty = not any(
+                str(record.get(col, "")).strip()
+                for col in ["Data", "Matéria", "Conteúdo"]
+            )
+            if not is_empty:
+                record["_sheet_row"] = sheet_row
+                active_records.append(record)
 
-    df = pd.DataFrame(records)
+    df = pd.DataFrame(active_records)
     for col in columns:
         if col not in df.columns:
             df[col] = ""
-    df = df[columns]
-    df["_sheet_row"] = range(2, len(df) + 2)
+    df = df[columns + ["_sheet_row"]]
     df["Data"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
     df["Última revisão"] = pd.to_datetime(df["Última revisão"], dayfirst=True, errors="coerce")
     df["Tempo (h)"] = pd.to_numeric(df["Tempo (h)"], errors="coerce").fillna(0)
@@ -295,9 +321,6 @@ if page == "Home":
             rows = all_data.groupby("Matéria", as_index=False)["Exercícios"].sum().rename(columns={"Exercícios": "Respondidas"})
             st.dataframe(rows, use_container_width=True, hide_index=True, height=300)
         else: st.info("Sem registros de questões.")
-    st.markdown("### Todos os registros")
-    st.dataframe(display_table(all_data), use_container_width=True, hide_index=True, height=350)
-
 elif page == "Adicionar":
     st.markdown("<h1>➕ Adicionar estudo</h1>", unsafe_allow_html=True)
     st.markdown("<div class='subtitle'>Cadastre seus estudos direto pelo site.</div>", unsafe_allow_html=True)

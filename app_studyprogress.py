@@ -13,8 +13,8 @@ WORKSHEET_NAME = "Registros"
 REVIEW_INTERVAL_DAYS = 40
 
 subjects = [
-    "Matemática", "Física", "Química", "Português", "História",
-    "Filosofia", "Sociologia", "Literatura", "Redação",
+    "Matemática", "Física", "Química", "Biologia", "Português", "História",
+    "Geografia", "Filosofia", "Sociologia", "Literatura", "Redação",
 ]
 
 columns = [
@@ -28,8 +28,10 @@ subject_themes = {
     "Matemática": {"main": "#2F80ED", "soft": "#EAF3FF", "medium": "#D6E9FF"},
     "Física": {"main": "#8B5CF6", "soft": "#F1ECFF", "medium": "#E1D6FF"},
     "Química": {"main": "#10B981", "soft": "#E9FBF4", "medium": "#D4F8E8"},
+    "Biologia": {"main": "#22C55E", "soft": "#F0FDF4", "medium": "#DCFCE7"},
     "Português": {"main": "#EF5DA8", "soft": "#FFF0F7", "medium": "#FFD9EA"},
     "História": {"main": "#F59E0B", "soft": "#FFF7E8", "medium": "#FFE6B8"},
+    "Geografia": {"main": "#0EA5E9", "soft": "#F0F9FF", "medium": "#E0F2FE"},
     "Filosofia": {"main": "#14B8A6", "soft": "#E9FBF8", "medium": "#CFF7F1"},
     "Sociologia": {"main": "#F97316", "soft": "#FFF1E8", "medium": "#FFDCC7"},
     "Literatura": {"main": "#7C6EE6", "soft": "#F0EEFF", "medium": "#DDD8FF"},
@@ -38,8 +40,9 @@ subject_themes = {
 
 icons = {
     "Home": "🏠", "Adicionar": "➕", "Matemática": "√x", "Física": "⚛",
-    "Química": "⚗", "Português": "📖", "História": "🏛", "Filosofia": "💡",
-    "Sociologia": "👥", "Literatura": "📚", "Redação": "✎",
+    "Química": "⚗", "Biologia": "🧬", "Português": "📖", "História": "🏛",
+    "Geografia": "🌎", "Filosofia": "💡", "Sociologia": "👥",
+    "Literatura": "📚", "Redação": "✎",
 }
 
 

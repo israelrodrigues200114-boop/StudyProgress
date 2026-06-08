@@ -10,7 +10,12 @@ st.set_page_config(page_title="StudyProgress", layout="wide", initial_sidebar_st
 
 SPREADSHEET_NAME = "FutureEng_V4"
 WORKSHEET_NAME = "Registros"
-REVIEW_INTERVAL_DAYS = 40
+REVIEW_INTERVALS = {
+    0: {"label": "1 dia após adicionar", "days": 1},
+    1: {"label": "1 semana depois", "days": 7},
+    2: {"label": "mais 1 semana depois", "days": 7},
+}
+MONTHLY_REVIEW_START_STAGE = 3
 
 subjects = [
     "Matemática", "Física", "Química", "Biologia", "Português", "História",
@@ -23,19 +28,21 @@ columns = [
 ]
 
 subject_themes = {
-    "Home": {"main": "#2F80ED", "soft": "#EAF3FF", "medium": "#D6E9FF"},
-    "Adicionar": {"main": "#2563EB", "soft": "#EFF6FF", "medium": "#DBEAFE"},
-    "Matemática": {"main": "#2F80ED", "soft": "#EAF3FF", "medium": "#D6E9FF"},
-    "Física": {"main": "#8B5CF6", "soft": "#F1ECFF", "medium": "#E1D6FF"},
-    "Química": {"main": "#10B981", "soft": "#E9FBF4", "medium": "#D4F8E8"},
-    "Biologia": {"main": "#22C55E", "soft": "#F0FDF4", "medium": "#DCFCE7"},
-    "Português": {"main": "#EF5DA8", "soft": "#FFF0F7", "medium": "#FFD9EA"},
-    "História": {"main": "#F59E0B", "soft": "#FFF7E8", "medium": "#FFE6B8"},
-    "Geografia": {"main": "#0EA5E9", "soft": "#F0F9FF", "medium": "#E0F2FE"},
-    "Filosofia": {"main": "#14B8A6", "soft": "#E9FBF8", "medium": "#CFF7F1"},
-    "Sociologia": {"main": "#F97316", "soft": "#FFF1E8", "medium": "#FFDCC7"},
-    "Literatura": {"main": "#7C6EE6", "soft": "#F0EEFF", "medium": "#DDD8FF"},
-    "Redação": {"main": "#EC4899", "soft": "#FFF0F8", "medium": "#FFD8EC"},
+    "Home": {"main": "#2563EB", "soft": "#EFF6FF", "medium": "#DBEAFE"},
+    "Adicionar": {"main": "#0F766E", "soft": "#ECFDF5", "medium": "#CCFBF1"},
+
+    # Paleta com cores únicas por matéria, mantendo fundo claro/pastel.
+    "Matemática": {"main": "#2563EB", "soft": "#EFF6FF", "medium": "#DBEAFE"},   # azul: lógica/estrutura
+    "Física": {"main": "#7C3AED", "soft": "#F5F3FF", "medium": "#DDD6FE"},       # roxo: universo/energia
+    "Química": {"main": "#059669", "soft": "#ECFDF5", "medium": "#A7F3D0"},      # verde-esmeralda: laboratório/ciência
+    "Biologia": {"main": "#65A30D", "soft": "#F7FEE7", "medium": "#D9F99D"},     # verde-lima: vida/natureza
+    "Português": {"main": "#DC2626", "soft": "#FEF2F2", "medium": "#FECACA"},    # vermelho: linguagem/atenção
+    "História": {"main": "#B45309", "soft": "#FFFBEB", "medium": "#FDE68A"},     # âmbar/marrom: passado/documentos
+    "Geografia": {"main": "#0284C7", "soft": "#F0F9FF", "medium": "#BAE6FD"},    # azul-céu: mapas/planeta
+    "Filosofia": {"main": "#4338CA", "soft": "#EEF2FF", "medium": "#C7D2FE"},    # índigo: reflexão/ideias
+    "Sociologia": {"main": "#DB2777", "soft": "#FDF2F8", "medium": "#FBCFE8"},   # rosa forte: sociedade/pessoas
+    "Literatura": {"main": "#9333EA", "soft": "#FAF5FF", "medium": "#E9D5FF"},   # violeta: arte/imaginação
+    "Redação": {"main": "#EA580C", "soft": "#FFF7ED", "medium": "#FED7AA"},      # laranja: produção/argumentação
 }
 
 icons = {
@@ -178,15 +185,43 @@ def mark_pending_done(sheet_row):
     clear_data_cache()
 
 
-def mark_review_done(sheet_row):
+def get_review_stage(value):
+    text_value = str(value).strip()
+    if text_value.isdigit():
+        return int(text_value)
+    # Compatibilidade com registros antigos, que salvavam apenas "Sim".
+    if text_value.lower() == "sim":
+        return 1
+    return 0
+
+
+def get_next_review_info(row):
+    stage = get_review_stage(row.get("Revisão feita", ""))
+    base_date = row.get("Última revisão") if stage > 0 and pd.notna(row.get("Última revisão")) else row.get("Data")
+
+    if pd.isna(base_date):
+        return pd.NaT, stage, "Sem data base"
+
+    if stage in REVIEW_INTERVALS:
+        interval = REVIEW_INTERVALS[stage]
+        next_review = pd.Timestamp(base_date) + pd.Timedelta(days=interval["days"])
+        label = interval["label"]
+    else:
+        next_review = pd.Timestamp(base_date) + pd.DateOffset(months=1)
+        label = "mensal"
+
+    return next_review, stage, label
+
+
+def mark_review_done(sheet_row, current_stage):
     worksheet = connect_to_sheet()
+    next_stage = get_review_stage(current_stage) + 1
     worksheet.update(
         range_name=f"J{int(sheet_row)}:K{int(sheet_row)}",
-        values=[[date.today().strftime("%d/%m/%Y"), "Sim"]],
+        values=[[date.today().strftime("%d/%m/%Y"), str(next_stage)]],
         value_input_option="USER_ENTERED",
     )
     clear_data_cache()
-
 
 def show_metric_card(title, value, desc):
     st.markdown(
@@ -216,12 +251,20 @@ def get_pending(df):
 
 def get_reviews(df):
     if df.empty:
-        return pd.DataFrame(columns=columns + ["_sheet_row", "Dias sem revisar"])
-    review_df = df.dropna(subset=["Data"]).copy()
-    review_df["Data base da revisão"] = review_df["Última revisão"].fillna(review_df["Data"])
-    review_df["Dias sem revisar"] = (pd.Timestamp(date.today()) - review_df["Data base da revisão"]).dt.days
-    return review_df[review_df["Dias sem revisar"] >= REVIEW_INTERVAL_DAYS].sort_values("Dias sem revisar", ascending=False)
+        return pd.DataFrame(columns=columns + ["_sheet_row", "Próxima revisão", "Etapa revisão", "Tipo revisão", "Dias de atraso"])
 
+    review_df = df.dropna(subset=["Data"]).copy()
+    review_info = review_df.apply(get_next_review_info, axis=1, result_type="expand")
+    review_info.columns = ["Próxima revisão", "Etapa revisão", "Tipo revisão"]
+    review_df = pd.concat([review_df, review_info], axis=1)
+
+    today = pd.Timestamp(date.today()).normalize()
+    review_df["Próxima revisão"] = pd.to_datetime(review_df["Próxima revisão"], errors="coerce")
+    review_df["Dias de atraso"] = (today - review_df["Próxima revisão"]).dt.days
+
+    return review_df[
+        review_df["Próxima revisão"].notna() & (review_df["Próxima revisão"] <= today)
+    ].sort_values("Dias de atraso", ascending=False)
 
 def display_table(df):
     if df.empty:
@@ -285,7 +328,7 @@ if page == "Home":
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1: show_metric_card("Dados", "100%", "Sistema conectado")
     with c2: show_metric_card("Pendências", int(total_pending), "Em aberto")
-    with c3: show_metric_card("Revisão", len(review_df), "Itens com 40+ dias")
+    with c3: show_metric_card("Revisão", len(review_df), "Itens vencidos")
     with c4: show_metric_card("Horas Estudadas", f"{round(total_hours, 1)}h", "Total registrado")
     with c5: show_metric_card("Questões", int(total_exercises), "Respondidas")
     st.write("")
@@ -302,15 +345,15 @@ if page == "Home":
                 if st.button("✓ Marcar pendência como feita", key=f"pending_{row['ID']}"):
                     mark_pending_done(row["_sheet_row"]); st.rerun()
     with right:
-        st.markdown(f"### Revisões de {REVIEW_INTERVAL_DAYS} dias")
+        st.markdown("### Revisões espaçadas")
         if review_df.empty:
             st.success("Nenhuma revisão pendente.")
         for _, row in review_df.iterrows():
             with st.container(border=True):
                 st.markdown(f"**{row['Matéria']} — {row['Conteúdo']}**")
-                st.caption(f"{int(row['Dias sem revisar'])} dias sem revisar")
+                st.caption(f"Próxima revisão: {format_date_br(row['Próxima revisão'])} • etapa: {row['Tipo revisão']} • atraso: {int(row['Dias de atraso'])} dia(s)")
                 if st.button("✓ Revisei hoje", key=f"review_{row['ID']}"):
-                    mark_review_done(row["_sheet_row"]); st.rerun()
+                    mark_review_done(row["_sheet_row"], row["Etapa revisão"]); st.rerun()
     st.write("")
     left2, right2 = st.columns(2)
     with left2:

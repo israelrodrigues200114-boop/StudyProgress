@@ -15,7 +15,14 @@ REVIEW_INTERVALS = {
     1: {"label": "1 semana depois", "days": 7},
     2: {"label": "mais 1 semana depois", "days": 7},
 }
-MONTHLY_REVIEW_START_STAGE = 3
+
+REVIEW_TYPE_OPTIONS = ["Espaçada", "Mensal", "Sem revisão"]
+REVIEW_TYPE_CODES = {
+    "Espaçada": "E",
+    "Mensal": "M",
+    "Sem revisão": "N",
+}
+REVIEW_TYPE_LABELS = {value: key for key, value in REVIEW_TYPE_CODES.items()}
 
 subjects = [
     "Matemática", "Física", "Química", "Biologia", "Português", "História",
@@ -30,19 +37,17 @@ columns = [
 subject_themes = {
     "Home": {"main": "#2563EB", "soft": "#EFF6FF", "medium": "#DBEAFE"},
     "Adicionar": {"main": "#0F766E", "soft": "#ECFDF5", "medium": "#CCFBF1"},
-
-    # Paleta com cores únicas por matéria, mantendo fundo claro/pastel.
-    "Matemática": {"main": "#2563EB", "soft": "#EFF6FF", "medium": "#DBEAFE"},   # azul: lógica/estrutura
-    "Física": {"main": "#7C3AED", "soft": "#F5F3FF", "medium": "#DDD6FE"},       # roxo: universo/energia
-    "Química": {"main": "#059669", "soft": "#ECFDF5", "medium": "#A7F3D0"},      # verde-esmeralda: laboratório/ciência
-    "Biologia": {"main": "#65A30D", "soft": "#F7FEE7", "medium": "#D9F99D"},     # verde-lima: vida/natureza
-    "Português": {"main": "#DC2626", "soft": "#FEF2F2", "medium": "#FECACA"},    # vermelho: linguagem/atenção
-    "História": {"main": "#B45309", "soft": "#FFFBEB", "medium": "#FDE68A"},     # âmbar/marrom: passado/documentos
-    "Geografia": {"main": "#0284C7", "soft": "#F0F9FF", "medium": "#BAE6FD"},    # azul-céu: mapas/planeta
-    "Filosofia": {"main": "#4338CA", "soft": "#EEF2FF", "medium": "#C7D2FE"},    # índigo: reflexão/ideias
-    "Sociologia": {"main": "#DB2777", "soft": "#FDF2F8", "medium": "#FBCFE8"},   # rosa forte: sociedade/pessoas
-    "Literatura": {"main": "#9333EA", "soft": "#FAF5FF", "medium": "#E9D5FF"},   # violeta: arte/imaginação
-    "Redação": {"main": "#EA580C", "soft": "#FFF7ED", "medium": "#FED7AA"},      # laranja: produção/argumentação
+    "Matemática": {"main": "#2563EB", "soft": "#EFF6FF", "medium": "#DBEAFE"},
+    "Física": {"main": "#7C3AED", "soft": "#F5F3FF", "medium": "#DDD6FE"},
+    "Química": {"main": "#059669", "soft": "#ECFDF5", "medium": "#A7F3D0"},
+    "Biologia": {"main": "#65A30D", "soft": "#F7FEE7", "medium": "#D9F99D"},
+    "Português": {"main": "#DC2626", "soft": "#FEF2F2", "medium": "#FECACA"},
+    "História": {"main": "#B45309", "soft": "#FFFBEB", "medium": "#FDE68A"},
+    "Geografia": {"main": "#0284C7", "soft": "#F0F9FF", "medium": "#BAE6FD"},
+    "Filosofia": {"main": "#4338CA", "soft": "#EEF2FF", "medium": "#C7D2FE"},
+    "Sociologia": {"main": "#DB2777", "soft": "#FDF2F8", "medium": "#FBCFE8"},
+    "Literatura": {"main": "#9333EA", "soft": "#FAF5FF", "medium": "#E9D5FF"},
+    "Redação": {"main": "#EA580C", "soft": "#FFF7ED", "medium": "#FED7AA"},
 }
 
 icons = {
@@ -158,10 +163,13 @@ def build_row_values(study_date, subject, content, time_hours, exercises, hits, 
     ]
 
 
-def save_record(study_date, subject, content, time_hours, exercises, hits, pending, observations):
+def save_record(study_date, subject, content, time_hours, exercises, hits, pending, observations, review_type):
     worksheet = connect_to_sheet()
     worksheet.append_row(
-        build_row_values(study_date, subject, content, time_hours, exercises, hits, pending, observations, new_id()),
+        build_row_values(
+            study_date, subject, content, time_hours, exercises, hits,
+            pending, observations, new_id(), review_done=make_review_state(review_type, 0)
+        ),
         value_input_option="USER_ENTERED",
     )
     clear_data_cache()
@@ -185,24 +193,51 @@ def mark_pending_done(sheet_row):
     clear_data_cache()
 
 
-def get_review_stage(value):
+def make_review_state(review_type, stage=0):
+    code = REVIEW_TYPE_CODES.get(review_type, "E")
+    return f"{code}|{int(stage)}"
+
+
+def parse_review_state(value):
+    """
+    Usa a coluna "Revisão feita" para guardar:
+    E|0, E|1... = revisão espaçada
+    M|0, M|1... = revisão mensal
+    N|0 = sem revisão
+    """
     text_value = str(value).strip()
+
+    if "|" in text_value:
+        code, stage_text = text_value.split("|", 1)
+        code = code.strip().upper()
+        if code not in REVIEW_TYPE_LABELS:
+            code = "E"
+        stage = int(stage_text) if stage_text.strip().isdigit() else 0
+        return REVIEW_TYPE_LABELS[code], stage
+
+    # Compatibilidade com registros antigos.
     if text_value.isdigit():
-        return int(text_value)
-    # Compatibilidade com registros antigos, que salvavam apenas "Sim".
+        return "Espaçada", int(text_value)
     if text_value.lower() == "sim":
-        return 1
-    return 0
+        return "Espaçada", 1
+    return "Espaçada", 0
 
 
 def get_next_review_info(row):
-    stage = get_review_stage(row.get("Revisão feita", ""))
+    review_type, stage = parse_review_state(row.get("Revisão feita", ""))
+
+    if review_type == "Sem revisão":
+        return pd.NaT, stage, "Sem revisão", make_review_state(review_type, stage)
+
     base_date = row.get("Última revisão") if stage > 0 and pd.notna(row.get("Última revisão")) else row.get("Data")
 
     if pd.isna(base_date):
-        return pd.NaT, stage, "Sem data base"
+        return pd.NaT, stage, "Sem data base", make_review_state(review_type, stage)
 
-    if stage in REVIEW_INTERVALS:
+    if review_type == "Mensal":
+        next_review = pd.Timestamp(base_date) + pd.DateOffset(months=1)
+        label = "mensal"
+    elif stage in REVIEW_INTERVALS:
         interval = REVIEW_INTERVALS[stage]
         next_review = pd.Timestamp(base_date) + pd.Timedelta(days=interval["days"])
         label = interval["label"]
@@ -210,15 +245,21 @@ def get_next_review_info(row):
         next_review = pd.Timestamp(base_date) + pd.DateOffset(months=1)
         label = "mensal"
 
-    return next_review, stage, label
+    return next_review, stage, label, make_review_state(review_type, stage)
 
 
-def mark_review_done(sheet_row, current_stage):
+def mark_review_done(sheet_row, current_state):
     worksheet = connect_to_sheet()
-    next_stage = get_review_stage(current_stage) + 1
+    review_type, current_stage = parse_review_state(current_state)
+
+    if review_type == "Sem revisão":
+        clear_data_cache()
+        return
+
+    next_stage = current_stage + 1
     worksheet.update(
         range_name=f"J{int(sheet_row)}:K{int(sheet_row)}",
-        values=[[date.today().strftime("%d/%m/%Y"), str(next_stage)]],
+        values=[[date.today().strftime("%d/%m/%Y"), make_review_state(review_type, next_stage)]],
         value_input_option="USER_ENTERED",
     )
     clear_data_cache()
@@ -251,11 +292,11 @@ def get_pending(df):
 
 def get_reviews(df):
     if df.empty:
-        return pd.DataFrame(columns=columns + ["_sheet_row", "Próxima revisão", "Etapa revisão", "Tipo revisão", "Dias de atraso"])
+        return pd.DataFrame(columns=columns + ["_sheet_row", "Próxima revisão", "Etapa revisão", "Tipo revisão", "Estado revisão", "Dias de atraso"])
 
     review_df = df.dropna(subset=["Data"]).copy()
     review_info = review_df.apply(get_next_review_info, axis=1, result_type="expand")
-    review_info.columns = ["Próxima revisão", "Etapa revisão", "Tipo revisão"]
+    review_info.columns = ["Próxima revisão", "Etapa revisão", "Tipo revisão", "Estado revisão"]
     review_df = pd.concat([review_df, review_info], axis=1)
 
     today = pd.Timestamp(date.today()).normalize()
@@ -319,6 +360,7 @@ button {{ border-radius: 14px !important; }}
 ''', unsafe_allow_html=True)
 
 st.markdown("<div class='logo-title'>StudyProgress</div>", unsafe_allow_html=True)
+st.caption("v2.2 — revisão espaçada, mensal ou sem revisão")
 
 if page == "Home":
     total_hours, total_exercises, total_pending = get_totals(all_data)
@@ -345,7 +387,7 @@ if page == "Home":
                 if st.button("✓ Marcar pendência como feita", key=f"pending_{row['ID']}"):
                     mark_pending_done(row["_sheet_row"]); st.rerun()
     with right:
-        st.markdown("### Revisões espaçadas")
+        st.markdown("### Revisões")
         if review_df.empty:
             st.success("Nenhuma revisão pendente.")
         for _, row in review_df.iterrows():
@@ -353,7 +395,7 @@ if page == "Home":
                 st.markdown(f"**{row['Matéria']} — {row['Conteúdo']}**")
                 st.caption(f"Próxima revisão: {format_date_br(row['Próxima revisão'])} • etapa: {row['Tipo revisão']} • atraso: {int(row['Dias de atraso'])} dia(s)")
                 if st.button("✓ Revisei hoje", key=f"review_{row['ID']}"):
-                    mark_review_done(row["_sheet_row"], row["Etapa revisão"]); st.rerun()
+                    mark_review_done(row["_sheet_row"], row["Estado revisão"]); st.rerun()
     st.write("")
     left2, right2 = st.columns(2)
     with left2:
@@ -381,13 +423,14 @@ elif page == "Adicionar":
             exercises = st.number_input("Exercícios", min_value=0, step=1)
             hits = st.number_input("Acertos", min_value=0, step=1)
         pending = st.selectbox("Pendência", ["Não", "Sim"])
+        review_type = st.selectbox("Tipo de revisão", REVIEW_TYPE_OPTIONS)
         observations = st.text_area("Observações")
         submitted = st.form_submit_button("Salvar estudo")
         if submitted:
             if not content.strip(): st.warning("Preencha o conteúdo estudado antes de salvar.")
             elif hits > exercises: st.warning("O número de acertos não pode ser maior que o número de exercícios.")
             else:
-                save_record(study_date, subject, content, time_hours, exercises, hits, pending, observations)
+                save_record(study_date, subject, content, time_hours, exercises, hits, pending, observations, review_type)
                 st.success("Estudo salvo com sucesso!"); st.rerun()
 
 else:
@@ -422,13 +465,29 @@ else:
                 edit_exercises = st.number_input("Exercícios", min_value=0, value=int(selected["Exercícios"]), step=1)
                 edit_hits = st.number_input("Acertos", min_value=0, value=int(selected["Acertos"]), step=1)
             edit_pending = st.selectbox("Pendência", ["Não", "Sim"], index=1 if selected["Pendência"].lower() == "sim" else 0)
+            current_review_type, current_review_stage = parse_review_state(selected["Revisão feita"])
+            edit_review_type = st.selectbox(
+                "Tipo de revisão",
+                REVIEW_TYPE_OPTIONS,
+                index=REVIEW_TYPE_OPTIONS.index(current_review_type) if current_review_type in REVIEW_TYPE_OPTIONS else 0,
+            )
             edit_obs = st.text_area("Observações", value=selected["Observações"])
             if st.form_submit_button("💾 Salvar alterações"):
                 if not edit_content.strip(): st.warning("Preencha o conteúdo estudado.")
                 elif edit_hits > edit_exercises: st.warning("Acertos não podem ser maiores que exercícios.")
                 else:
                     pending_done = selected["Pendência feita"] if edit_pending == "Sim" and selected["Pendência"].lower() == "sim" else ""
-                    values = build_row_values(edit_date, edit_subject, edit_content, edit_time, edit_exercises, edit_hits, edit_pending, edit_obs, selected["ID"], selected["Última revisão"], selected["Revisão feita"], pending_done)
+                    if edit_review_type != current_review_type:
+                        review_state = make_review_state(edit_review_type, 0)
+                        last_review = ""
+                    else:
+                        review_state = make_review_state(edit_review_type, current_review_stage)
+                        last_review = selected["Última revisão"]
+
+                    values = build_row_values(
+                        edit_date, edit_subject, edit_content, edit_time, edit_exercises, edit_hits,
+                        edit_pending, edit_obs, selected["ID"], last_review, review_state, pending_done
+                    )
                     update_record(selected["_sheet_row"], values); st.success("Registro atualizado!"); st.rerun()
         with st.expander("🗑️ Excluir este registro"):
             st.warning("Esta ação apaga a linha da planilha e não poderá ser desfeita.")

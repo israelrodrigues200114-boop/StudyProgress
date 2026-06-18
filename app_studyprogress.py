@@ -62,6 +62,10 @@ SHEET_HEADERS = {
         "Status_Revisao", "Data_Criacao", "Ultima_Revisao",
     ],
     "Gabaritos": ["ID_Prova", "Prova", "Área", "Questão", "Gabarito", "Conteúdo"],
+    "Cronograma_Teoria": [
+        "ID_Teoria", "Dia_Semana", "Horario_Inicio", "Horario_Fim",
+        "Materia", "Status", "Observacoes"
+    ],
 }
 
 STATUS_OPTIONS = ["Pendente", "Fazendo", "Feito", "Corrigido", "Pulado"]
@@ -69,12 +73,12 @@ ALT_OPTIONS = ["", "A", "B", "C", "D", "E"]
 TIPO_ERRO_OPTIONS = ["", "Conteúdo", "Interpretação", "Conta", "Atenção", "Tempo", "Chute", "Outro"]
 
 MENU_ITEMS = [
-    "Início", "Semana", "Simulados", "Correção", "Banco de Erros", "Pendências",
+    "Início", "Semana", "Cronograma Teoria", "Simulados", "Correção", "Banco de Erros", "Pendências",
     "Desempenho", "Adicionar", "Provas Cadastradas",
 ] + SUBJECTS
 
 MENU_ICONS = {
-    "Início": "🏠", "Semana": "📅", "Simulados": "✅", "Correção": "📝", "Banco de Erros": "🎯",
+    "Início": "🏠", "Semana": "📅", "Cronograma Teoria": "🕒", "Simulados": "✅", "Correção": "📝", "Banco de Erros": "🎯",
     "Pendências": "🔔", "Desempenho": "📊", "Adicionar": "➕", "Provas Cadastradas": "🗂️",
     "Matemática": "√x", "Física": "⚛️", "Química": "⚗️", "Biologia": "🌿", "Português": "📚",
     "História": "🏛️", "Geografia": "🌎", "Filosofia": "💭", "Sociologia": "👥",
@@ -97,18 +101,26 @@ st.markdown(
         border-right: 0;
     }
     section[data-testid="stSidebar"] * { color: white !important; }
-    section[data-testid="stSidebar"] [role="radiogroup"] label {
-        border-radius: 14px;
-        padding: 8px 10px;
-        margin-bottom: 4px;
-        transition: 0.18s ease;
+    section[data-testid="stSidebar"] .stButton > button {
+        width: 100%;
+        justify-content: flex-start;
+        text-align: left;
+        border: 0 !important;
+        border-radius: 16px !important;
+        padding: 0.72rem 0.85rem !important;
+        margin: 0.10rem 0 !important;
+        background: rgba(255,255,255,.08) !important;
+        color: white !important;
+        box-shadow: none !important;
+        font-weight: 700 !important;
     }
-    section[data-testid="stSidebar"] [role="radiogroup"] label:hover {
-        background: rgba(255,255,255,.14);
+    section[data-testid="stSidebar"] .stButton > button:hover {
+        background: rgba(255,255,255,.18) !important;
+        transform: translateX(2px);
     }
-    section[data-testid="stSidebar"] [aria-checked="true"] {
-        background: rgba(255,255,255,.23) !important;
-        box-shadow: inset 4px 0 0 #FFFFFF;
+    section[data-testid="stSidebar"] .nav-active > div > button {
+        background: rgba(255,255,255,.24) !important;
+        box-shadow: inset 4px 0 0 #FFFFFF !important;
     }
     .sidebar-title {
         font-size: 23px; font-weight: 800; margin: 10px 0 20px 0; color: #fff;
@@ -249,6 +261,39 @@ def parse_google_sheet_date(value):
     return pd.to_datetime(value, dayfirst=True, errors="coerce")
 
 
+def parse_time_hours(value):
+    """Converte tempo de estudo sem deixar 1.5 virar 15.
+
+    No Google Sheets em pt-BR, às vezes 1.5 pode ser interpretado como 15.
+    Para sessões de estudo, valores inteiros entre 10 e 99 provavelmente vieram desse bug
+    e são tratados como décimos: 15 -> 1.5, 25 -> 2.5.
+    """
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return 0.0
+    raw = str(value).strip().replace("h", "").replace("H", "").strip()
+    try:
+        if "," in raw and "." in raw:
+            raw = raw.replace(".", "").replace(",", ".")
+        elif "," in raw:
+            raw = raw.replace(",", ".")
+        num = float(raw)
+    except Exception:
+        return 0.0
+    if num.is_integer() and 10 <= num <= 99 and "," not in str(value) and "." not in str(value):
+        num = num / 10
+    return round(num, 2)
+
+
+def format_time_hours_for_sheet(value):
+    """Salva decimal com vírgula para evitar bug de localidade no Google Sheets."""
+    try:
+        num = float(value)
+    except Exception:
+        num = 0.0
+    text = f"{num:.2f}".rstrip("0").rstrip(".")
+    return text.replace(".", ",")
+
+
 def today_ts():
     return pd.Timestamp(date.today()).normalize()
 
@@ -381,7 +426,7 @@ def load_data():
     df = df[REGISTROS_COLUMNS + ["_sheet_row"]]
     df["Data"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
     df["Última revisão"] = pd.to_datetime(df["Última revisão"], dayfirst=True, errors="coerce")
-    df["Tempo (h)"] = pd.to_numeric(df["Tempo (h)"], errors="coerce").fillna(0)
+    df["Tempo (h)"] = df["Tempo (h)"].apply(parse_time_hours)
     df["Exercícios"] = pd.to_numeric(df["Exercícios"], errors="coerce").fillna(0).astype(int)
     df["Acertos"] = pd.to_numeric(df["Acertos"], errors="coerce").fillna(0).astype(int)
     text_cols = ["Matéria", "Conteúdo", "Pendência", "Observações", "ID", "Revisão feita", "Pendência feita"]
@@ -392,7 +437,7 @@ def load_data():
 
 def build_row_values(study_date, subject, content, time_hours, exercises, hits, pending, observations, record_id, last_review="", review_done="", pending_done=""):
     return [
-        format_date_br(study_date), subject, content.strip(), float(time_hours), int(exercises), int(hits),
+        format_date_br(study_date), subject, content.strip(), format_time_hours_for_sheet(time_hours), int(exercises), int(hits),
         pending, observations.strip(), record_id,
         format_date_br(last_review) if str(last_review).strip() not in ("", "NaT") else "",
         review_done, pending_done,
@@ -444,14 +489,14 @@ def save_record(study_date, subject, content, time_hours, exercises, hits, pendi
     worksheet = connect_to_sheet()
     worksheet.append_row(
         build_row_values(study_date, subject, content, time_hours, exercises, hits, pending, observations, uuid.uuid4().hex[:10].upper(), review_done=make_review_state(review_type, 0)),
-        value_input_option="USER_ENTERED",
+        value_input_option="RAW",
     )
     clear_all_cache()
 
 
 def update_record(sheet_row, values):
     worksheet = connect_to_sheet()
-    worksheet.update(range_name=f"A{int(sheet_row)}:L{int(sheet_row)}", values=[values], value_input_option="USER_ENTERED")
+    worksheet.update(range_name=f"A{int(sheet_row)}:L{int(sheet_row)}", values=[values], value_input_option="RAW")
     clear_all_cache()
 
 
@@ -555,6 +600,64 @@ def load_erros():
     return df
 
 
+def load_cronograma_teoria():
+    df = load_sheet_df("Cronograma_Teoria")
+    if df.empty:
+        return df
+    for col in ["Dia_Semana", "Horario_Inicio", "Horario_Fim", "Materia", "Status", "Observacoes"]:
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str).str.strip()
+    ordem = {"segunda": 0, "terça": 1, "terca": 1, "quarta": 2, "quinta": 3, "sexta": 4, "sábado": 5, "sabado": 5, "domingo": 6}
+    df["_ordem_dia"] = df["Dia_Semana"].str.lower().map(ordem).fillna(99).astype(int)
+    df["_hora_ordem"] = df["Horario_Inicio"].astype(str).str.replace(":", "", regex=False)
+    return df.sort_values(["_ordem_dia", "_hora_ordem", "Materia"])
+
+
+def theory_today(df):
+    if df.empty:
+        return df
+    hoje = nice_day_name(today_ts()).lower()
+    today_df = df[(df["Dia_Semana"].str.lower() == hoje) & (df["Status"].str.lower().isin(["ativo", "", "pendente"]))].copy()
+    return today_df.sort_values(["Horario_Inicio", "Materia"])
+
+
+def append_teoria(dia, inicio, fim, materia, status, obs):
+    append_rows("Cronograma_Teoria", [[new_id("TEO"), dia, inicio, fim, materia, status, obs]])
+
+
+def update_teoria(item_id, dia, inicio, fim, materia, status, obs):
+    ws = get_or_create_ws("Cronograma_Teoria", SHEET_HEADERS["Cronograma_Teoria"])
+    values = ws.get_all_values()
+    if not values:
+        return False
+    headers = values[0]
+    idx = {h: i + 1 for i, h in enumerate(headers)}
+    for row_idx, row in enumerate(values[1:], start=2):
+        if len(row) >= idx["ID_Teoria"] and row[idx["ID_Teoria"] - 1] == item_id:
+            ws.update(range_name=f"A{row_idx}:G{row_idx}", values=[[item_id, dia, inicio, fim, materia, status, obs]], value_input_option="RAW")
+            clear_all_cache()
+            return True
+    return False
+
+
+def delete_teoria(item_id):
+    ws = get_or_create_ws("Cronograma_Teoria", SHEET_HEADERS["Cronograma_Teoria"])
+    values = ws.get_all_values()
+    if not values:
+        return False
+    headers = values[0]
+    try:
+        id_idx = headers.index("ID_Teoria") + 1
+    except ValueError:
+        return False
+    for row_idx, row in enumerate(values[1:], start=2):
+        if len(row) >= id_idx and row[id_idx - 1] == item_id:
+            ws.delete_rows(row_idx)
+            clear_all_cache()
+            return True
+    return False
+
+
 def proxima_revisao_por_etapa(etapa):
     etapa = int(etapa or 0)
     dias = {0: 1, 1: 7, 2: 30, 3: 60}.get(etapa, 30)
@@ -647,6 +750,14 @@ def metric_card(title, value, desc=""):
     )
 
 
+def quick_nav_button(label, page, key, prefill=None):
+    if st.button(label, key=key):
+        if prefill:
+            st.session_state["prefill_adicionar"] = prefill
+        st.session_state["menu_page"] = page
+        st.rerun()
+
+
 def render_week_cards(cronograma, selected_day=None):
     """Renderiza a semana usando componentes nativos do Streamlit.
     Isso evita o erro de aparecer <div class=...> na tela, que acontece em alguns deploys/mobile.
@@ -691,97 +802,127 @@ def render_week_cards(cronograma, selected_day=None):
 
 def sidebar_menu():
     with st.sidebar:
-        st.markdown('<div class="sidebar-title">📘 StudyProgress</div>', unsafe_allow_html=True)
-        default_page = st.session_state.get("menu_page", "Início")
-        default_index = MENU_ITEMS.index(default_page) if default_page in MENU_ITEMS else 0
-        page = st.radio(
-            "Menu",
-            MENU_ITEMS,
-            index=default_index,
-            label_visibility="collapsed",
-            format_func=lambda item: f"{MENU_ICONS.get(item, '')} {item}",
-            key="menu_page",
-        )
         st.markdown(
             """
-            <div class="sidebar-profile">
-                <b>Israel Rodrigues</b><br>
-                Foco • Disciplina • Resultado
+            <div style="padding:10px 4px 18px 4px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="width:44px;height:44px;border-radius:16px;background:rgba(255,255,255,.20);display:flex;align-items:center;justify-content:center;font-size:24px;">📘</div>
+                    <div>
+                        <div style="font-size:22px;font-weight:900;letter-spacing:-.5px;">StudyProgress</div>
+                        <div style="font-size:12px;opacity:.82;">painel de estudos</div>
+                    </div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-    return page
+        if "menu_page" not in st.session_state or st.session_state["menu_page"] not in MENU_ITEMS:
+            st.session_state["menu_page"] = "Início"
+
+        for item in MENU_ITEMS:
+            active = st.session_state.get("menu_page") == item
+            label = f"{MENU_ICONS.get(item, '')}  {item}"
+            if active:
+                st.markdown('<div class="nav-active">', unsafe_allow_html=True)
+            if st.button(label, key=f"nav_{item}"):
+                st.session_state["menu_page"] = item
+                st.rerun()
+            if active:
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown(
+            """
+            <div class="sidebar-profile">
+                <b>Israel Rodrigues</b><br>
+                Foco • ENEM • Fuvest
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    return st.session_state.get("menu_page", "Início")
 
 
 # ============================================================
 # Páginas
 # ============================================================
 def page_inicio(all_data):
-    show_topbar("Olá, Israel! 👋", "Vamos continuar evoluindo hoje.")
+    show_topbar("Olá, Israel! 👋", "Seu painel do dia: teoria, provas, pendências e revisões.")
     cron = load_cronograma()
+    teoria = load_cronograma_teoria()
+    teoria_hoje = theory_today(teoria)
     erros = load_erros()
     reviews_antigas = get_reviews(all_data)
     pend_antigas = get_pending(all_data)
 
-    today_activities = cron[cron["Data_dt"] == today_ts()].copy() if not cron.empty else pd.DataFrame()
-    lembrete = today_activities.iloc[0] if not today_activities.empty else None
-
-    st.markdown('<div class="hero"><h1>Lembrete de hoje</h1><p>Veja o que precisa ser feito agora e o restante da semana.</p></div>', unsafe_allow_html=True)
-
-    left, right = st.columns([1, 2])
-    with left:
-        with st.container(border=True):
-            st.markdown("### 🎯 Lembrete de hoje")
-            if lembrete is not None:
-                st.markdown(area_badge(lembrete.get("Área", "")), unsafe_allow_html=True)
-                st.markdown(f"#### {lembrete.get('Atividade', '')}")
-                if str(lembrete.get("Observações", "")).strip():
-                    st.write(lembrete.get("Observações", ""))
-                st.caption(f"Prova: {lembrete.get('Prova', '')} • Questões: {lembrete.get('Questões', '')}")
-                if st.button("Começar agora", key="start_today"):
-                    st.session_state["menu_page"] = "Simulados"
-                    st.rerun()
-            else:
-                st.success("Hoje não tem atividade cadastrada no cronograma.")
-    with right:
-        with st.container(border=True):
-            st.markdown("### 📅 Visão da semana")
-            render_week_cards(cron)
-
-    st.write("")
+    provas_hoje = cron[cron["Data_dt"] == today_ts()].copy() if not cron.empty else pd.DataFrame()
     pend_erros_total = len(erros[(erros["Status_Revisao"] != "Concluída")]) if not erros.empty else 0
     rev_erros_hoje = len(erros[(erros["Status_Revisao"] != "Concluída") & (erros["Proxima_Revisao_dt"] <= today_ts())]) if not erros.empty else 0
     revisoes_total = len(reviews_antigas) + rev_erros_hoje
     pendencias_total = len(pend_antigas) + pend_erros_total
 
+    st.markdown(
+        '<div class="hero"><h1>Seu dia de estudos</h1><p>Veja teoria, provas, pendências e revisões sem misturar tudo.</p></div>',
+        unsafe_allow_html=True,
+    )
+
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        concluidas = int((cron["Status"].astype(str).str.lower().isin(["feito", "corrigido"])).sum()) if not cron.empty else 0
-        metric_card("Atividades concluídas", concluidas, "no cronograma")
+        metric_card("Teoria hoje", len(teoria_hoje), "matérias planejadas")
     with c2:
-        metric_card("Revisões", revisoes_total, "vencidas/para hoje")
+        metric_card("Provas hoje", len(provas_hoje), "simulados/questões")
     with c3:
-        metric_card("Pendências", pendencias_total, "itens em aberto")
+        metric_card("Pendências", pendencias_total, "em aberto")
     with c4:
-        total_ex = all_data["Exercícios"].sum() if not all_data.empty else 0
-        total_hits = all_data["Acertos"].sum() if not all_data.empty else 0
-        taxa = round((total_hits / total_ex) * 100) if total_ex else 0
-        metric_card("Taxa de acertos", f"{taxa}%", "média geral")
+        metric_card("Revisões", revisoes_total, "para hoje/vencidas")
+
+    st.write("")
+    left, right = st.columns([1.05, 1.25])
+    with left:
+        with st.container(border=True):
+            st.markdown("### 🕒 Cronograma de teoria hoje")
+            if teoria_hoje.empty:
+                st.success("Nenhuma matéria de teoria cadastrada para hoje.")
+                quick_nav_button("Montar cronograma de teoria", "Cronograma Teoria", "home_add_teoria")
+            else:
+                for _, row in teoria_hoje.iterrows():
+                    horario = f"{row.get('Horario_Inicio','')}–{row.get('Horario_Fim','')}".strip("–")
+                    st.markdown(f"**{horario} — {row.get('Materia','')}**")
+                    st.caption(row.get("Observacoes", ""))
+                    quick_nav_button(
+                        "Registrar estudo",
+                        "Adicionar",
+                        f"reg_teoria_{row.get('ID_Teoria','')}",
+                        prefill={"Materia": row.get("Materia", ""), "Origem": "Cronograma_Teoria"},
+                    )
+                    st.divider()
+        with st.container(border=True):
+            st.markdown("### ✅ Provas e simulados hoje")
+            if provas_hoje.empty:
+                st.success("Nenhuma prova/simulado cadastrado para hoje.")
+            else:
+                for _, row in provas_hoje.iterrows():
+                    st.markdown(f"**{row.get('Atividade','')}**")
+                    st.caption(f"{row.get('Área','')} • {row.get('Prova','')} • {row.get('Questões','')}")
+                    quick_nav_button("Responder/Começar", "Simulados", f"start_prova_{row.get('ID_Atividade','')}")
+                    st.divider()
+    with right:
+        with st.container(border=True):
+            st.markdown("### 📅 Semana de provas")
+            render_week_cards(cron)
 
     st.write("")
     left, right = st.columns(2)
     with left:
         with st.container(border=True):
-            st.markdown("### 🔔 Próximas pendências")
+            st.markdown("### 🔔 Pendências")
             proximas = cron[cron["Status"].astype(str).str.lower().isin(["pendente", "fazendo"])] if not cron.empty else pd.DataFrame()
-            proximas = proximas.sort_values("Data_dt").head(6) if not proximas.empty else proximas
+            proximas = proximas.sort_values("Data_dt").head(4) if not proximas.empty else proximas
             if proximas.empty and pend_antigas.empty:
-                st.success("Nada pendente no cronograma.")
+                st.success("Nada pendente no momento.")
             else:
                 for _, row in proximas.iterrows():
                     st.markdown(f"- **{format_date_br(row['Data_dt'])}** — {row['Atividade']} {status_badge(row['Status'])}", unsafe_allow_html=True)
-                for _, row in pend_antigas.head(3).iterrows():
+                for _, row in pend_antigas.head(4).iterrows():
                     st.markdown(f"- **{row['Matéria']} — {row['Conteúdo']}** • pendência antiga")
     with right:
         with st.container(border=True):
@@ -791,8 +932,83 @@ def page_inicio(all_data):
                 st.success("Nenhuma revisão vencida.")
             for _, row in due.head(5).iterrows():
                 st.markdown(f"- **Questão {row['Questão']} — {row['Prova']}** • {row['Tipo_Erro']} {status_badge('Revisar hoje')}", unsafe_allow_html=True)
-            for _, row in reviews_antigas.head(3).iterrows():
+            for _, row in reviews_antigas.head(5).iterrows():
                 st.markdown(f"- **{row['Matéria']} — {row['Conteúdo']}** • revisão antiga")
+
+
+def page_cronograma_teoria():
+    show_topbar("Cronograma Teoria", "Monte sua rotina fixa por matéria e horário. Você pode alterar quando quiser.")
+    teoria = load_cronograma_teoria()
+    dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+
+    tab1, tab2, tab3 = st.tabs(["Semana", "Adicionar", "Editar/Excluir"])
+    with tab1:
+        st.markdown("### Rotina semanal de teoria")
+        cols = st.columns(7)
+        for i, dia in enumerate(dias):
+            dia_df = teoria[teoria["Dia_Semana"].str.lower() == dia.lower()] if not teoria.empty else pd.DataFrame()
+            with cols[i]:
+                with st.container(border=True):
+                    st.markdown(f"#### {dia[:3]}")
+                    if dia_df.empty:
+                        st.caption("Livre")
+                    else:
+                        for _, row in dia_df.iterrows():
+                            status = str(row.get("Status", "Ativo"))
+                            if status.lower() == "pausado":
+                                st.caption(f"⏸ {row.get('Horario_Inicio','')} {row.get('Materia','')}")
+                            else:
+                                st.markdown(f"**{row.get('Horario_Inicio','')}**")
+                                st.write(row.get("Materia", ""))
+        st.info("Na tela Início, os itens do dia aparecem como atalho para a tela Adicionar, já com a matéria preenchida.")
+
+    with tab2:
+        st.markdown("### Adicionar matéria ao cronograma")
+        with st.form("add_teoria"):
+            c1, c2 = st.columns(2)
+            with c1:
+                dia = st.selectbox("Dia da semana", dias)
+                materia = st.selectbox("Matéria", SUBJECTS)
+                status = st.selectbox("Status", ["Ativo", "Pausado"])
+            with c2:
+                inicio = st.text_input("Horário de início", value="19:00", placeholder="19:00")
+                fim = st.text_input("Horário de fim", value="20:00", placeholder="20:00")
+                obs = st.text_input("Observações", placeholder="opcional")
+            if st.form_submit_button("Adicionar ao cronograma"):
+                append_teoria(dia, inicio, fim, materia, status, obs)
+                st.success("Matéria adicionada ao cronograma de teoria.")
+                st.rerun()
+
+    with tab3:
+        st.markdown("### Editar ou excluir")
+        if teoria.empty:
+            st.info("Nenhum item cadastrado ainda.")
+            return
+        options = {
+            row["ID_Teoria"]: f"{row['Dia_Semana']} • {row['Horario_Inicio']}–{row['Horario_Fim']} • {row['Materia']}"
+            for _, row in teoria.iterrows()
+        }
+        selected_id = st.selectbox("Escolha o item", list(options), format_func=lambda rid: options[rid])
+        selected = teoria[teoria["ID_Teoria"] == selected_id].iloc[0]
+        with st.form(f"edit_teoria_{selected_id}"):
+            c1, c2 = st.columns(2)
+            with c1:
+                dia = st.selectbox("Dia", dias, index=dias.index(selected["Dia_Semana"]) if selected["Dia_Semana"] in dias else 0)
+                materia = st.selectbox("Matéria", SUBJECTS, index=SUBJECTS.index(selected["Materia"]) if selected["Materia"] in SUBJECTS else 0)
+                status = st.selectbox("Status", ["Ativo", "Pausado"], index=1 if selected["Status"].lower() == "pausado" else 0)
+            with c2:
+                inicio = st.text_input("Horário início", value=str(selected["Horario_Inicio"]))
+                fim = st.text_input("Horário fim", value=str(selected["Horario_Fim"]))
+                obs = st.text_input("Observações", value=str(selected.get("Observacoes", "")))
+            if st.form_submit_button("Salvar alterações"):
+                update_teoria(selected_id, dia, inicio, fim, materia, status, obs)
+                st.success("Cronograma atualizado.")
+                st.rerun()
+        with st.expander("Excluir item"):
+            confirm = st.checkbox("Confirmo que quero excluir este item.", key=f"conf_del_teo_{selected_id}")
+            if st.button("Excluir", disabled=not confirm, key=f"del_teo_{selected_id}"):
+                delete_teoria(selected_id)
+                st.rerun()
 
 
 def page_semana():
@@ -1006,15 +1222,25 @@ def page_desempenho(all_data):
 
 
 def page_adicionar():
-    show_topbar("Adicionar estudo", "Cadastro antigo mantido do jeito que já funciona.")
+    prefill = st.session_state.get("prefill_adicionar", {})
+    show_topbar("Adicionar estudo", "Registre o que você estudou. Pode vir do cronograma de teoria ou ser manual.")
+    if prefill:
+        st.info(f"Matéria vinda do cronograma: {prefill.get('Materia', '')}. Preencha o conteúdo real que você estudou.")
+        if st.button("Limpar preenchimento do cronograma"):
+            st.session_state.pop("prefill_adicionar", None)
+            st.rerun()
+
+    default_subject = prefill.get("Materia", "Matemática") if isinstance(prefill, dict) else "Matemática"
+    default_index = SUBJECTS.index(default_subject) if default_subject in SUBJECTS else 0
+
     with st.form("form_adicionar_estudo", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
             study_date = st.date_input("Data", value=date.today(), format="DD/MM/YYYY")
-            subject = st.selectbox("Matéria", SUBJECTS)
-            content = st.text_input("Conteúdo estudado")
+            subject = st.selectbox("Matéria", SUBJECTS, index=default_index)
+            content = st.text_input("Conteúdo estudado", placeholder="Ex.: função afim, ecologia, repertório...")
         with c2:
-            time_hours = st.number_input("Tempo (h)", min_value=0.0, step=0.5)
+            time_hours = st.number_input("Tempo (h)", min_value=0.0, max_value=12.0, step=0.25, format="%.2f")
             exercises = st.number_input("Exercícios", min_value=0, step=1)
             hits = st.number_input("Acertos", min_value=0, step=1)
         pending = st.selectbox("Pendência", ["Não", "Sim"])
@@ -1028,6 +1254,7 @@ def page_adicionar():
                 st.warning("O número de acertos não pode ser maior que o número de exercícios.")
             else:
                 save_record(study_date, subject, content, time_hours, exercises, hits, pending, observations, review_type)
+                st.session_state.pop("prefill_adicionar", None)
                 st.success("Estudo salvo com sucesso!")
                 st.rerun()
 
@@ -1088,7 +1315,7 @@ def page_subject(all_data, subject):
             edit_subject = st.selectbox("Matéria", SUBJECTS, index=SUBJECTS.index(selected["Matéria"]) if selected["Matéria"] in SUBJECTS else 0)
             edit_content = st.text_input("Conteúdo estudado", value=selected["Conteúdo"])
         with e2:
-            edit_time = st.number_input("Tempo (h)", min_value=0.0, value=float(selected["Tempo (h)"]), step=0.5)
+            edit_time = st.number_input("Tempo (h)", min_value=0.0, max_value=12.0, value=float(selected["Tempo (h)"]), step=0.25, format="%.2f")
             edit_exercises = st.number_input("Exercícios", min_value=0, value=int(selected["Exercícios"]), step=1)
             edit_hits = st.number_input("Acertos", min_value=0, value=int(selected["Acertos"]), step=1)
         edit_pending = st.selectbox("Pendência", ["Não", "Sim"], index=1 if selected["Pendência"].lower() == "sim" else 0)
@@ -1132,6 +1359,8 @@ if page == "Início":
     page_inicio(all_data)
 elif page == "Semana":
     page_semana()
+elif page == "Cronograma Teoria":
+    page_cronograma_teoria()
 elif page == "Simulados":
     page_simulados()
 elif page == "Correção":

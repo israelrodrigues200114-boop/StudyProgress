@@ -226,11 +226,26 @@ def format_date_br(value):
         return ""
     if hasattr(value, "strftime"):
         return value.strftime("%d/%m/%Y")
-    parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
+    parsed = parse_google_sheet_date(value)
     return "" if pd.isna(parsed) else parsed.strftime("%d/%m/%Y")
 
 
 def parse_date(value):
+    return parse_google_sheet_date(value)
+
+
+def parse_google_sheet_date(value):
+    """Converte datas vindas do Google Sheets, inclusive número serial do Excel/Sheets."""
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return pd.NaT
+    text = str(value).strip()
+    # Quando a data vem como número serial, ex.: 46236
+    try:
+        if text.replace(".", "", 1).isdigit() and len(text) <= 6:
+            serial = float(text)
+            return pd.to_datetime("1899-12-30") + pd.to_timedelta(serial, unit="D")
+    except Exception:
+        pass
     return pd.to_datetime(value, dayfirst=True, errors="coerce")
 
 
@@ -502,7 +517,7 @@ def display_table(df):
 def load_cronograma():
     df = load_sheet_df("Cronograma_Provas")
     if not df.empty:
-        df["Data_dt"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
+        df["Data_dt"] = df["Data"].apply(parse_google_sheet_date)
     else:
         df["Data_dt"] = pd.NaT
     return df
@@ -512,7 +527,7 @@ def load_provas():
     df = load_sheet_df("Provas_Cadastradas")
     if not df.empty:
         df["Total_Questões"] = pd.to_numeric(df["Total_Questões"], errors="coerce").fillna(45).astype(int)
-        df["Data_dt"] = pd.to_datetime(df["Data_Prevista"], dayfirst=True, errors="coerce")
+        df["Data_dt"] = df["Data_Prevista"].apply(parse_google_sheet_date)
     return df
 
 
@@ -534,7 +549,7 @@ def load_erros():
     df = load_sheet_df("Banco_Erros")
     if not df.empty:
         df["Questão"] = pd.to_numeric(df["Questão"], errors="coerce").fillna(0).astype(int)
-        df["Proxima_Revisao_dt"] = pd.to_datetime(df["Proxima_Revisao"], dayfirst=True, errors="coerce")
+        df["Proxima_Revisao_dt"] = df["Proxima_Revisao"].apply(parse_google_sheet_date)
     else:
         df["Proxima_Revisao_dt"] = pd.NaT
     return df
@@ -633,40 +648,59 @@ def metric_card(title, value, desc=""):
 
 
 def render_week_cards(cronograma, selected_day=None):
+    """Renderiza a semana usando componentes nativos do Streamlit.
+    Isso evita o erro de aparecer <div class=...> na tela, que acontece em alguns deploys/mobile.
+    """
     monday, sunday = week_bounds(selected_day)
     week_df = cronograma[(cronograma["Data_dt"] >= monday) & (cronograma["Data_dt"] <= sunday)].copy()
-    html = '<div class="week-grid">'
-    for i in range(7):
+    cols = st.columns(7)
+    for i, col in enumerate(cols):
         d = monday + pd.Timedelta(days=i)
         day_rows = week_df[week_df["Data_dt"] == d]
         activity = "Livre"
-        status = ""
+        status = "Livre"
+        area = ""
+        prova = ""
+        questoes = ""
         if not day_rows.empty:
             first = day_rows.iloc[0]
-            activity = str(first.get("Atividade", "")) or str(first.get("Tipo", ""))
-            status = str(first.get("Status", "Pendente"))
-        cls = "day-card today" if d.normalize() == today_ts() else "day-card"
-        html += f'''
-        <div class="{cls}">
-            <div class="day-name">{nice_day_name(d)[:3]}</div>
-            <div class="day-num">{d.strftime('%d')}</div>
-            <div class="day-activity">{activity}</div>
-            <div style="margin-top:10px;"><span class="status-dot"></span><span class="status-text">{status or 'Livre'}</span></div>
-        </div>
-        '''
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
-    st.markdown(f"<div class='small-muted' style='margin-top:8px;'>Semana de {format_date_br(monday)} a {format_date_br(sunday)}</div>", unsafe_allow_html=True)
+            activity = str(first.get("Atividade", "")) or str(first.get("Tipo", "")) or "Atividade"
+            status = str(first.get("Status", "Pendente")) or "Pendente"
+            area = str(first.get("Área", ""))
+            prova = str(first.get("Prova", ""))
+            questoes = str(first.get("Questões", ""))
+        with col:
+            border_color = "#7C3AED" if d.normalize() == today_ts() else "#E5E7EB"
+            bg = "#F5F3FF" if d.normalize() == today_ts() else "#FFFFFF"
+            st.markdown(
+                f"""
+                <div style="border:1px solid {border_color}; background:{bg}; border-radius:18px; padding:14px; min-height:160px; box-shadow:0 8px 20px rgba(15,23,42,.05);">
+                    <div style="font-size:12px;font-weight:800;color:#475569;text-transform:uppercase;">{nice_day_name(d)[:3]}</div>
+                    <div style="font-size:24px;font-weight:800;color:#0F172A;margin:2px 0 8px 0;">{d.strftime('%d')}</div>
+                    <div style="font-size:13px;color:#334155;line-height:1.35;min-height:46px;">{activity}</div>
+                    <div style="font-size:11px;color:#64748B;margin-top:8px;">{area}</div>
+                    <div style="font-size:11px;color:#64748B;">{prova}</div>
+                    <div style="font-size:11px;color:#64748B;">{questoes}</div>
+                    <div style="margin-top:10px;font-size:12px;color:#64748B;">● {status}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    st.caption(f"Semana de {format_date_br(monday)} a {format_date_br(sunday)}")
 
 
 def sidebar_menu():
     with st.sidebar:
         st.markdown('<div class="sidebar-title">📘 StudyProgress</div>', unsafe_allow_html=True)
+        default_page = st.session_state.get("menu_page", "Início")
+        default_index = MENU_ITEMS.index(default_page) if default_page in MENU_ITEMS else 0
         page = st.radio(
             "Menu",
             MENU_ITEMS,
+            index=default_index,
             label_visibility="collapsed",
             format_func=lambda item: f"{MENU_ICONS.get(item, '')} {item}",
+            key="menu_page",
         )
         st.markdown(
             """
@@ -679,13 +713,13 @@ def sidebar_menu():
         )
     return page
 
+
 # ============================================================
 # Páginas
 # ============================================================
 def page_inicio(all_data):
     show_topbar("Olá, Israel! 👋", "Vamos continuar evoluindo hoje.")
     cron = load_cronograma()
-    provas = load_provas()
     erros = load_erros()
     reviews_antigas = get_reviews(all_data)
     pend_antigas = get_pending(all_data)
@@ -694,57 +728,71 @@ def page_inicio(all_data):
     lembrete = today_activities.iloc[0] if not today_activities.empty else None
 
     st.markdown('<div class="hero"><h1>Lembrete de hoje</h1><p>Veja o que precisa ser feito agora e o restante da semana.</p></div>', unsafe_allow_html=True)
+
     left, right = st.columns([1, 2])
     with left:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        if lembrete is not None:
-            st.markdown(area_badge(lembrete.get("Área", "")), unsafe_allow_html=True)
-            st.markdown(f"### {lembrete.get('Atividade', '')}")
-            st.write(lembrete.get("Observações", ""))
-            st.caption(f"Prova: {lembrete.get('Prova', '')} • Questões: {lembrete.get('Questões', '')}")
-            if st.button("Começar agora", key="start_today"):
-                st.session_state["nav_hint"] = "Simulados"
-        else:
-            st.success("Hoje não tem atividade cadastrada no cronograma.")
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("### 🎯 Lembrete de hoje")
+            if lembrete is not None:
+                st.markdown(area_badge(lembrete.get("Área", "")), unsafe_allow_html=True)
+                st.markdown(f"#### {lembrete.get('Atividade', '')}")
+                if str(lembrete.get("Observações", "")).strip():
+                    st.write(lembrete.get("Observações", ""))
+                st.caption(f"Prova: {lembrete.get('Prova', '')} • Questões: {lembrete.get('Questões', '')}")
+                if st.button("Começar agora", key="start_today"):
+                    st.session_state["menu_page"] = "Simulados"
+                    st.rerun()
+            else:
+                st.success("Hoje não tem atividade cadastrada no cronograma.")
     with right:
-        st.markdown('<div class="card"><h3>Visão da semana</h3>', unsafe_allow_html=True)
-        render_week_cards(cron)
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("### 📅 Visão da semana")
+            render_week_cards(cron)
 
     st.write("")
+    pend_erros_total = len(erros[(erros["Status_Revisao"] != "Concluída")]) if not erros.empty else 0
+    rev_erros_hoje = len(erros[(erros["Status_Revisao"] != "Concluída") & (erros["Proxima_Revisao_dt"] <= today_ts())]) if not erros.empty else 0
+    revisoes_total = len(reviews_antigas) + rev_erros_hoje
+    pendencias_total = len(pend_antigas) + pend_erros_total
+
     c1, c2, c3, c4 = st.columns(4)
-    with c1: metric_card("Atividades concluídas", int((cron["Status"] == "Feito").sum()) if not cron.empty else 0, "no cronograma")
-    with c2: metric_card("Horas de estudo", f"{round(all_data['Tempo (h)'].sum(), 1)}h" if not all_data.empty else "0h", "registros antigos")
+    with c1:
+        concluidas = int((cron["Status"].astype(str).str.lower().isin(["feito", "corrigido"])).sum()) if not cron.empty else 0
+        metric_card("Atividades concluídas", concluidas, "no cronograma")
+    with c2:
+        metric_card("Revisões", revisoes_total, "vencidas/para hoje")
     with c3:
+        metric_card("Pendências", pendencias_total, "itens em aberto")
+    with c4:
         total_ex = all_data["Exercícios"].sum() if not all_data.empty else 0
         total_hits = all_data["Acertos"].sum() if not all_data.empty else 0
         taxa = round((total_hits / total_ex) * 100) if total_ex else 0
         metric_card("Taxa de acertos", f"{taxa}%", "média geral")
-    with c4:
-        pend_erros = len(erros[(erros["Status_Revisao"] != "Concluída")]) if not erros.empty else 0
-        metric_card("Pendências", int(len(pend_antigas) + pend_erros), "itens para revisar")
 
     st.write("")
     left, right = st.columns(2)
     with left:
-        st.markdown("### Próximas pendências")
-        proximas = cron[cron["Status"].astype(str).str.lower().isin(["pendente", "fazendo"])] if not cron.empty else pd.DataFrame()
-        proximas = proximas.sort_values("Data_dt").head(6)
-        if proximas.empty:
-            st.success("Nada pendente no cronograma.")
-        else:
-            for _, row in proximas.iterrows():
-                st.markdown(f"- **{format_date_br(row['Data_dt'])}** — {row['Atividade']} {status_badge(row['Status'])}", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("### 🔔 Próximas pendências")
+            proximas = cron[cron["Status"].astype(str).str.lower().isin(["pendente", "fazendo"])] if not cron.empty else pd.DataFrame()
+            proximas = proximas.sort_values("Data_dt").head(6) if not proximas.empty else proximas
+            if proximas.empty and pend_antigas.empty:
+                st.success("Nada pendente no cronograma.")
+            else:
+                for _, row in proximas.iterrows():
+                    st.markdown(f"- **{format_date_br(row['Data_dt'])}** — {row['Atividade']} {status_badge(row['Status'])}", unsafe_allow_html=True)
+                for _, row in pend_antigas.head(3).iterrows():
+                    st.markdown(f"- **{row['Matéria']} — {row['Conteúdo']}** • pendência antiga")
     with right:
-        st.markdown("### Revisões para hoje")
-        due = erros[(erros["Status_Revisao"] != "Concluída") & (erros["Proxima_Revisao_dt"] <= today_ts())] if not erros.empty else pd.DataFrame()
-        if due.empty and reviews_antigas.empty:
-            st.success("Nenhuma revisão vencida.")
-        for _, row in due.head(5).iterrows():
-            st.markdown(f"- **Questão {row['Questão']} — {row['Prova']}** • {row['Tipo_Erro']} {status_badge('Revisar hoje')}", unsafe_allow_html=True)
-        for _, row in reviews_antigas.head(3).iterrows():
-            st.markdown(f"- **{row['Matéria']} — {row['Conteúdo']}** • revisão antiga")
+        with st.container(border=True):
+            st.markdown("### 🔁 Revisões para hoje")
+            due = erros[(erros["Status_Revisao"] != "Concluída") & (erros["Proxima_Revisao_dt"] <= today_ts())] if not erros.empty else pd.DataFrame()
+            if due.empty and reviews_antigas.empty:
+                st.success("Nenhuma revisão vencida.")
+            for _, row in due.head(5).iterrows():
+                st.markdown(f"- **Questão {row['Questão']} — {row['Prova']}** • {row['Tipo_Erro']} {status_badge('Revisar hoje')}", unsafe_allow_html=True)
+            for _, row in reviews_antigas.head(3).iterrows():
+                st.markdown(f"- **{row['Matéria']} — {row['Conteúdo']}** • revisão antiga")
 
 
 def page_semana():
@@ -990,7 +1038,10 @@ def page_provas_cadastradas():
     if provas.empty:
         st.info("Aba Provas_Cadastradas vazia.")
     else:
-        st.dataframe(provas.drop(columns=["Data_dt"], errors="ignore"), use_container_width=True, hide_index=True)
+        show = provas.drop(columns=["Data_dt"], errors="ignore").copy()
+        if "Data_Prevista" in show.columns:
+            show["Data_Prevista"] = show["Data_Prevista"].apply(format_date_br)
+        st.dataframe(show, use_container_width=True, hide_index=True)
     st.markdown("### Cadastrar prova manualmente")
     with st.form("nova_prova"):
         c1, c2 = st.columns(2)

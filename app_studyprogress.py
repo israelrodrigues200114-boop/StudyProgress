@@ -508,11 +508,21 @@ st.markdown(
     .badge-orange { background:#FFF7ED; color:#EA580C; }
     .badge-gray { background:#F3F4F6; color:#4B5563; }
 
+    .week-grid {
+        display:grid;
+        grid-template-columns: repeat(7, minmax(135px, 1fr));
+        gap:14px;
+        width:100%;
+        overflow-x:auto;
+        padding:2px 0 12px 0;
+        scrollbar-width: thin;
+    }
+
     .week-native-card {
         border:1px solid #ECE7DE;
         border-radius:22px;
         padding:15px 14px;
-        min-height:172px;
+        min-height:190px;
         background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(255,251,245,.78));
         box-shadow: 0 13px 28px rgba(17,24,39,.055);
         display:flex;
@@ -520,6 +530,12 @@ st.markdown(
         justify-content:flex-start;
         gap:10px;
         overflow:hidden;
+    }
+
+    @media (max-width: 980px) {
+        .week-grid {
+            grid-template-columns: repeat(7, minmax(150px, 150px));
+        }
     }
 
     .week-native-card.today {
@@ -1359,11 +1375,11 @@ def quick_nav_button(label, page, key, prefill=None):
 
 
 def render_week_cards(cronograma, selected_day=None):
-    """Renderiza a semana com tudo dentro do próprio card do dia.
+    """Renderiza a semana como uma grade HTML única.
 
-    O ajuste é visual: antes o HTML abria um card e os componentes do Streamlit
-    eram renderizados fora dele em alguns navegadores, deixando retângulos vazios.
-    Agora cada card é um único bloco HTML completo.
+    Importante: não usa st.columns aqui, porque no tablet as colunas ficam estreitas
+    e quebram o texto na vertical. Também não deixa HTML indentado no começo da linha,
+    evitando aparecer </div> como texto no Streamlit.
     """
     monday, sunday = week_bounds(selected_day)
     if not cronograma.empty:
@@ -1371,8 +1387,8 @@ def render_week_cards(cronograma, selected_day=None):
     else:
         week_df = pd.DataFrame()
 
-    cols = st.columns(7)
-    for i, col in enumerate(cols):
+    cards = []
+    for i in range(7):
         d = monday + pd.Timedelta(days=i)
         day_rows = week_df[week_df["Data_dt"] == d] if not week_df.empty else pd.DataFrame()
         is_today = d.normalize() == today_ts()
@@ -1388,34 +1404,37 @@ def render_week_cards(cronograma, selected_day=None):
                 status_raw = normalize_text(row.get("Status", "Pendente")) or "Pendente"
                 color = get_color_for_area(area_raw)
                 task_parts.append(
-                    f'''
-                    <div class="week-task" style="border-left:4px solid {color};">
-                        <div class="week-area" style="color:{color};">{html.escape(area_raw)}</div>
-                        <div class="week-activity">{html.escape(atividade_raw)}</div>
-                        <span class="week-status">{html.escape(status_raw)}</span>
-                    </div>
-                    '''
+                    '<div class="week-task" style="border-left:4px solid {color};">'
+                    '<div class="week-area" style="color:{color};">{area}</div>'
+                    '<div class="week-activity">{atividade}</div>'
+                    '<span class="week-status">{status}</span>'
+                    '</div>'.format(
+                        color=color,
+                        area=html.escape(area_raw),
+                        atividade=html.escape(atividade_raw),
+                        status=html.escape(status_raw),
+                    )
                 )
             if len(day_rows) > 3:
                 task_parts.append(f'<div class="week-more">+ {len(day_rows)-3} atividade(s)</div>')
             body_html = "".join(task_parts)
 
         card_class = "week-native-card today" if is_today else "week-native-card"
-        card_html = f'''
-        <div class="{card_class}">
-            <div class="week-day-head">
-                <div>
-                    <div class="day-name">{html.escape(nice_day_name(d)[:3])}</div>
-                    <div class="day-num">{d.strftime("%d")}</div>
-                </div>
-                {today_pill}
-            </div>
-            <div class="week-card-body">{body_html}</div>
-        </div>
-        '''
-        with col:
-            st.markdown(card_html, unsafe_allow_html=True)
+        card_html = (
+            f'<div class="{card_class}">'
+            '<div class="week-day-head">'
+            '<div>'
+            f'<div class="day-name">{html.escape(nice_day_name(d)[:3])}</div>'
+            f'<div class="day-num">{d.strftime("%d")}</div>'
+            '</div>'
+            f'{today_pill}'
+            '</div>'
+            f'<div class="week-card-body">{body_html}</div>'
+            '</div>'
+        )
+        cards.append(card_html)
 
+    st.markdown('<div class="week-grid">' + ''.join(cards) + '</div>', unsafe_allow_html=True)
     st.caption(f"Semana de {format_date_br(monday)} a {format_date_br(sunday)}")
 
 def sidebar_menu():

@@ -4,6 +4,13 @@ from datetime import date, datetime, timedelta
 import gspread
 import pandas as pd
 import streamlit as st
+
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+except Exception:
+    px = None
+    go = None
 from google.oauth2.service_account import Credentials
 
 # ============================================================
@@ -13,7 +20,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(
     page_title="StudyProgress",
-    page_icon="📘",
+    page_icon=":material/school:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -73,129 +80,524 @@ ALT_OPTIONS = ["", "A", "B", "C", "D", "E"]
 TIPO_ERRO_OPTIONS = ["", "Conteúdo", "Interpretação", "Conta", "Atenção", "Tempo", "Chute", "Outro"]
 
 MENU_ITEMS = [
-    "Início", "Semana", "Cronograma Teoria", "Simulados", "Correção", "Banco de Erros", "Pendências",
-    "Desempenho", "Adicionar", "Provas Cadastradas",
+    "Início", "Planejamento", "Simulados", "Correção", "Banco de Erros",
+    "Pendências", "Desempenho", "Adicionar",
 ] + SUBJECTS
 
-MENU_ICONS = {
-    "Início": "🏠", "Semana": "📅", "Cronograma Teoria": "🕒", "Simulados": "✅", "Correção": "📝", "Banco de Erros": "🎯",
-    "Pendências": "🔔", "Desempenho": "📊", "Adicionar": "➕", "Provas Cadastradas": "🗂️",
-    "Matemática": "√x", "Física": "⚛️", "Química": "⚗️", "Biologia": "🌿", "Português": "📚",
-    "História": "🏛️", "Geografia": "🌎", "Filosofia": "💭", "Sociologia": "👥",
-    "Literatura": "📖", "Redação": "✎",
+MENU_SHORT = {
+    "Início": "IN", "Planejamento": "PL", "Simulados": "SM", "Correção": "CR",
+    "Banco de Erros": "BE", "Pendências": "PE", "Desempenho": "DE", "Adicionar": "AD",
+    "Matemática": "MT", "Física": "FI", "Química": "QU", "Biologia": "BI",
+    "Português": "PT", "História": "HI", "Geografia": "GE", "Filosofia": "FL",
+    "Sociologia": "SO", "Literatura": "LI", "Redação": "RD",
+}
+
+SUBJECT_COLORS = {
+    "Matemática": "#8B5CF6",   # lavanda forte
+    "Física": "#38BDF8",       # azul elétrico suave
+    "Química": "#14B8A6",      # teal
+    "Biologia": "#22C55E",     # verde folha
+    "Português": "#FB7185",    # rosa coral
+    "História": "#F59E0B",     # dourado
+    "Geografia": "#06B6D4",    # ciano
+    "Filosofia": "#A78BFA",    # lilás
+    "Sociologia": "#F472B6",   # pink suave
+    "Literatura": "#F97316",   # laranja palco
+    "Redação": "#EAB308",      # amarelo ouro
+}
+
+AREA_COLORS = {
+    "Matemática ENEM": "#8B5CF6",
+    "Natureza ENEM": "#22C55E",
+    "Linguagens ENEM": "#FB7185",
+    "Fuvest": "#A78BFA",
+    "Simulado Completo": "#14B8A6",
+    "ENEM": "#38BDF8",
 }
 
 # ============================================================
-# CSS — design baseado no protótipo com menu lateral azul/roxo
+# CSS — layout final: menu lateral limpo, cards profissionais e cores por matéria
 # ============================================================
+
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    .main .block-container { padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1320px; }
-
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1D4ED8 0%, #312E81 100%);
-        border-right: 0;
+    :root {
+        --midnight:#0B1026;
+        --midnight-2:#151B3D;
+        --violet:#6D5DF6;
+        --lavender:#A78BFA;
+        --rose:#F472B6;
+        --coral:#FB7185;
+        --gold:#F6C453;
+        --peach:#FDBA74;
+        --paper:#FCF8F3;
+        --card:#FFFFFF;
+        --ink:#111827;
+        --muted:#6B7280;
+        --border:#E9E2DA;
+        --soft:#FFF7ED;
     }
-    section[data-testid="stSidebar"] * { color: white !important; }
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+
+    [data-testid="stAppViewContainer"] {
+        background:
+            radial-gradient(circle at top left, rgba(167,139,250,.16), transparent 28%),
+            radial-gradient(circle at top right, rgba(251,113,133,.13), transparent 24%),
+            linear-gradient(180deg, #FCF8F3 0%, #FFFDF9 42%, #F8FAFC 100%);
+    }
+
+    .main .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 2.4rem;
+        max-width: 1400px;
+    }
+
+    /* Sidebar — estética midnight, sem bolinhas, sem cara genérica */
+    section[data-testid="stSidebar"] {
+        background:
+            radial-gradient(circle at 22% 6%, rgba(246,196,83,.18), transparent 18%),
+            radial-gradient(circle at 90% 36%, rgba(244,114,182,.15), transparent 22%),
+            linear-gradient(180deg, #0B1026 0%, #151B3D 52%, #2A124B 100%);
+        border-right: 1px solid rgba(255,255,255,.08);
+    }
+
+    section[data-testid="stSidebar"] * {
+        color: #FFF7ED !important;
+    }
+
+    section[data-testid="stSidebar"] ul,
+    section[data-testid="stSidebar"] li {
+        list-style: none !important;
+        padding-left: 0 !important;
+        margin-left: 0 !important;
+    }
+
     section[data-testid="stSidebar"] .stButton > button {
         width: 100%;
-        justify-content: flex-start;
-        text-align: left;
-        border: 0 !important;
-        border-radius: 16px !important;
-        padding: 0.72rem 0.85rem !important;
-        margin: 0.10rem 0 !important;
-        background: rgba(255,255,255,.08) !important;
-        color: white !important;
+        min-height: 46px;
+        border: 1px solid transparent !important;
+        border-radius: 18px !important;
+        padding: .76rem 1rem !important;
+        margin: .14rem 0 !important;
+        background: transparent !important;
+        color: rgba(255,247,237,.88) !important;
         box-shadow: none !important;
-        font-weight: 700 !important;
+        font-weight: 850 !important;
+        text-align: left !important;
+        justify-content: flex-start !important;
+        line-height: 1.1 !important;
+        letter-spacing: -.15px;
     }
+
     section[data-testid="stSidebar"] .stButton > button:hover {
-        background: rgba(255,255,255,.18) !important;
-        transform: translateX(2px);
+        background: rgba(255,255,255,.10) !important;
+        border-color: rgba(246,196,83,.28) !important;
+        transform: translateX(3px);
+        color: #FFFFFF !important;
     }
+
     section[data-testid="stSidebar"] .nav-active > div > button {
-        background: rgba(255,255,255,.24) !important;
-        box-shadow: inset 4px 0 0 #FFFFFF !important;
+        background: linear-gradient(135deg, rgba(167,139,250,.38), rgba(244,114,182,.23)) !important;
+        border-color: rgba(246,196,83,.38) !important;
+        box-shadow: inset 4px 0 0 #F6C453, 0 14px 30px rgba(0,0,0,.22) !important;
     }
-    .sidebar-title {
-        font-size: 23px; font-weight: 800; margin: 10px 0 20px 0; color: #fff;
-        letter-spacing: -.4px;
+
+    .sidebar-brand {
+        display:flex;
+        align-items:center;
+        gap:13px;
+        padding: 10px 4px 24px 4px;
     }
+
+    .brand-mark {
+        width:48px;
+        height:48px;
+        border-radius:18px;
+        background:
+            linear-gradient(135deg, #F6C453 0%, #F472B6 48%, #8B5CF6 100%);
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        color:#0B1026 !important;
+        font-weight:950;
+        font-size:17px;
+        letter-spacing:-.6px;
+        box-shadow: 0 18px 36px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.5);
+    }
+
+    .brand-title {
+        font-size:22px;
+        font-weight:950;
+        letter-spacing:-.8px;
+        color:#FFFFFF !important;
+    }
+
+    .brand-subtitle {
+        font-size:12px;
+        opacity:.74;
+        margin-top:2px;
+        color:#FDE68A !important;
+    }
+
     .sidebar-profile {
-        margin-top: 24px; padding: 14px; border-radius: 18px;
-        background: rgba(255,255,255,.12); font-size: 13px; line-height: 1.35;
+        margin-top: 24px;
+        padding: 15px;
+        border-radius: 22px;
+        background: rgba(255,255,255,.08);
+        font-size: 13px;
+        line-height: 1.35;
+        border:1px solid rgba(246,196,83,.20);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
     }
 
-    .page-title { font-size: 30px; font-weight: 800; color: #0F172A; margin-bottom: 2px; }
-    .page-subtitle { color: #64748B; margin-top: 0; margin-bottom: 18px; }
+    /* Cards e containers */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        border: 1px solid var(--border) !important;
+        border-radius: 26px !important;
+        box-shadow: 0 18px 48px rgba(17,24,39,.065) !important;
+        background: rgba(255,255,255,.78) !important;
+        backdrop-filter: blur(10px);
+    }
+
     .topbar {
-        display:flex; justify-content:space-between; align-items:center; gap:16px;
-        padding: 14px 18px; border: 1px solid #E5E7EB; border-radius: 20px; background:#FFFFFF;
-        box-shadow: 0 10px 30px rgba(15,23,42,.05); margin-bottom: 18px;
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        gap:16px;
+        padding: 16px 18px;
+        border: 1px solid var(--border);
+        border-radius: 28px;
+        background: rgba(255,255,255,.76);
+        box-shadow: 0 18px 42px rgba(17,24,39,.06);
+        margin-bottom: 18px;
+        backdrop-filter: blur(10px);
     }
-    .date-pill { padding: 10px 14px; border-radius: 14px; background:#F8FAFC; border:1px solid #E2E8F0; color:#334155; font-weight:600; }
 
+    .page-title {
+        font-size: 30px;
+        font-weight: 950;
+        color: var(--ink);
+        margin-bottom: 3px;
+        letter-spacing:-.9px;
+    }
+
+    .page-subtitle {
+        color: var(--muted);
+        margin-top: 0;
+        margin-bottom: 0;
+        font-weight: 500;
+    }
+
+    .date-pill {
+        padding: 10px 14px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #FFF7ED, #F5F3FF);
+        border:1px solid #E9E2DA;
+        color:#1F2937;
+        font-weight:850;
+        white-space: nowrap;
+    }
+
+    /* Hero inspirado em noite de estudos + brilho de palco */
     .hero {
-        padding: 26px; border-radius: 28px; background: linear-gradient(135deg, #EFF6FF 0%, #F5F3FF 55%, #FFF7ED 100%);
-        border: 1px solid #E5E7EB; margin-bottom:18px; box-shadow: 0 16px 40px rgba(2,6,23,.06);
+        position:relative;
+        overflow:hidden;
+        min-height:165px;
+        padding: 28px 30px;
+        border-radius: 34px;
+        background:
+            radial-gradient(circle at 78% 12%, rgba(246,196,83,.30), transparent 12%),
+            radial-gradient(circle at 92% 35%, rgba(244,114,182,.22), transparent 18%),
+            linear-gradient(135deg, #0B1026 0%, #1B1F4B 44%, #3A195D 100%);
+        border: 1px solid rgba(246,196,83,.26);
+        margin-bottom:18px;
+        box-shadow: 0 24px 60px rgba(11,16,38,.22);
     }
-    .hero h1 { margin:0; font-size:32px; color:#0F172A; letter-spacing:-.6px; }
-    .hero p { color:#475569; margin:8px 0 0 0; }
 
-    .card {
-        background:#FFFFFF; border:1px solid #E5E7EB; border-radius:22px; padding:20px;
-        box-shadow: 0 12px 32px rgba(15,23,42,.06); height:100%;
+    .hero:before {
+        content:"";
+        position:absolute;
+        inset:0;
+        background-image:
+            radial-gradient(circle, rgba(255,255,255,.55) 1px, transparent 1px),
+            radial-gradient(circle, rgba(246,196,83,.42) 1px, transparent 1px);
+        background-size: 42px 42px, 68px 68px;
+        background-position: 0 0, 18px 12px;
+        opacity:.16;
+        pointer-events:none;
     }
-    .metric-card {
-        background:#FFFFFF; border:1px solid #E5E7EB; border-radius:20px; padding:18px;
-        box-shadow: 0 10px 24px rgba(15,23,42,.05);
-    }
-    .metric-title { color:#64748B; font-size:13px; font-weight:700; margin-bottom:6px; }
-    .metric-value { color:#0F172A; font-size:28px; font-weight:800; line-height:1; }
-    .metric-desc { color:#94A3B8; font-size:12px; margin-top:6px; }
 
-    .week-grid { display:grid; grid-template-columns: repeat(7, minmax(105px, 1fr)); gap:12px; }
-    .day-card {
-        border:1px solid #E5E7EB; border-radius:18px; padding:14px; min-height:136px; background:#FFFFFF;
-        box-shadow: 0 8px 22px rgba(15,23,42,.04);
+    .hero h1 {
+        position:relative;
+        margin:0;
+        font-size:36px;
+        color:#FFF7ED;
+        letter-spacing:-1.1px;
+        max-width:720px;
     }
-    .day-card.today { border:2px solid #7C3AED; background:#F5F3FF; }
-    .day-name { font-size:12px; font-weight:800; color:#475569; text-transform:uppercase; }
-    .day-num { font-size:22px; font-weight:800; color:#0F172A; margin:2px 0 8px 0; }
-    .day-activity { font-size:13px; color:#334155; line-height:1.3; min-height:40px; }
-    .status-dot { display:inline-block; width:8px; height:8px; border-radius:99px; background:#7C3AED; margin-right:6px; }
-    .status-text { color:#64748B; font-size:12px; }
 
-    .badge { display:inline-block; padding:5px 10px; border-radius:999px; font-size:12px; font-weight:800; }
-    .badge-blue { background:#DBEAFE; color:#1D4ED8; }
-    .badge-purple { background:#EDE9FE; color:#6D28D9; }
-    .badge-green { background:#DCFCE7; color:#15803D; }
-    .badge-red { background:#FEE2E2; color:#DC2626; }
-    .badge-orange { background:#FFEDD5; color:#EA580C; }
-    .badge-gray { background:#F1F5F9; color:#475569; }
-
-    .error-card { border:1px solid #FECACA; background:#FFF7F7; border-radius:20px; padding:16px; margin-bottom:12px; }
-    .success-card { border:1px solid #BBF7D0; background:#F0FDF4; border-radius:20px; padding:16px; margin-bottom:12px; }
-
-    div[data-testid="stButton"] button, div[data-testid="stFormSubmitButton"] button {
-        border-radius: 14px; border: 0; background: linear-gradient(135deg,#2563EB,#7C3AED); color:#FFFFFF;
-        font-weight: 800; padding: 0.58rem 1rem;
+    .hero p {
+        position:relative;
+        color:#E9D5FF;
+        margin:10px 0 0 0;
+        font-size:15px;
+        font-weight:600;
+        max-width:720px;
     }
-    div[data-testid="stButton"] button:hover, div[data-testid="stFormSubmitButton"] button:hover {
-        filter: brightness(1.03); border:0; color:#FFFFFF;
+
+    .study-art {
+        position:absolute;
+        right:28px;
+        top:24px;
+        width:260px;
+        height:125px;
+        opacity:.98;
     }
-    .small-muted { color:#64748B; font-size:13px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { border-radius: 14px; padding: 8px 16px; background: #F8FAFC; }
+
+    .book-a, .book-b, .book-c {
+        position:absolute;
+        border-radius:16px;
+        box-shadow:0 18px 34px rgba(0,0,0,.24);
+        border:1px solid rgba(255,255,255,.23);
+    }
+
+    .book-a {
+        width:86px;
+        height:118px;
+        right:124px;
+        top:2px;
+        background:linear-gradient(180deg,#8B5CF6,#4C1D95);
+        transform:rotate(-6deg);
+    }
+
+    .book-b {
+        width:86px;
+        height:118px;
+        right:68px;
+        top:7px;
+        background:linear-gradient(180deg,#F472B6,#9D174D);
+        transform:rotate(5deg);
+    }
+
+    .book-c {
+        width:86px;
+        height:118px;
+        right:14px;
+        top:13px;
+        background:linear-gradient(180deg,#F6C453,#D97706);
+        transform:rotate(-2deg);
+    }
+
+    .book-line {
+        position:absolute;
+        left:14px;
+        right:14px;
+        height:7px;
+        border-radius:99px;
+        background:rgba(255,247,237,.78);
+    }
+
+    .pencil {
+        position:absolute;
+        width:132px;
+        height:14px;
+        right:72px;
+        top:101px;
+        background:linear-gradient(90deg,#FB7185,#FDBA74,#F6C453);
+        border-radius:999px;
+        transform:rotate(-14deg);
+        box-shadow:0 12px 24px rgba(0,0,0,.20);
+    }
+
+    .metric-card, .pro-card, .soft-card {
+        background: rgba(255,255,255,.84);
+        border:1px solid var(--border);
+        border-radius:24px;
+        padding:19px;
+        box-shadow: 0 16px 38px rgba(17,24,39,.06);
+        height:100%;
+        backdrop-filter: blur(8px);
+    }
+
+    .metric-title {
+        color:#6B7280;
+        font-size:13px;
+        font-weight:850;
+        margin-bottom:9px;
+    }
+
+    .metric-value {
+        color:#111827;
+        font-size:31px;
+        font-weight:950;
+        line-height:1;
+        letter-spacing:-1px;
+    }
+
+    .metric-desc {
+        color:#9CA3AF;
+        font-size:12px;
+        margin-top:8px;
+        font-weight:650;
+    }
+
+    .section-title {
+        font-size:23px;
+        font-weight:950;
+        color:#111827;
+        margin: 0 0 9px 0;
+        letter-spacing:-.65px;
+    }
+
+    .section-sub {
+        color:#6B7280;
+        font-size:13px;
+        margin-bottom:14px;
+        font-weight:500;
+    }
+
+    .task-card {
+        border:1px solid #ECE7DE;
+        background: linear-gradient(180deg, rgba(255,255,255,.93), rgba(255,251,245,.82));
+        border-radius:20px;
+        padding:14px 15px;
+        margin-bottom:10px;
+        box-shadow:0 10px 25px rgba(17,24,39,.045);
+    }
+
+    .task-line {
+        display:flex;
+        justify-content:space-between;
+        gap:12px;
+        align-items:center;
+    }
+
+    .task-title {
+        font-weight:950;
+        color:#111827;
+        letter-spacing:-.25px;
+    }
+
+    .task-meta {
+        color:#6B7280;
+        font-size:13px;
+        margin-top:4px;
+        line-height:1.35;
+    }
+
+    .subject-pill, .badge {
+        display:inline-block;
+        padding:5px 10px;
+        border-radius:999px;
+        font-size:12px;
+        font-weight:950;
+        white-space:nowrap;
+    }
+
+    .badge-blue { background:#EEF2FF; color:#6D5DF6; }
+    .badge-purple { background:#F5F3FF; color:#7C3AED; }
+    .badge-green { background:#ECFDF5; color:#059669; }
+    .badge-red { background:#FFF1F2; color:#E11D48; }
+    .badge-orange { background:#FFF7ED; color:#EA580C; }
+    .badge-gray { background:#F3F4F6; color:#4B5563; }
+
+    .week-native-card {
+        border:1px solid #ECE7DE;
+        border-radius:22px;
+        padding:15px;
+        min-height:160px;
+        background: rgba(255,255,255,.86);
+        box-shadow: 0 13px 28px rgba(17,24,39,.055);
+    }
+
+    .week-native-card.today {
+        border:2px solid #F6C453;
+        background:
+            radial-gradient(circle at top right, rgba(244,114,182,.16), transparent 35%),
+            linear-gradient(180deg, #FFF7ED, #F5F3FF);
+        box-shadow: 0 18px 40px rgba(246,196,83,.16);
+    }
+
+    .day-name {
+        font-size:12px;
+        font-weight:950;
+        color:#6B7280;
+        text-transform:uppercase;
+    }
+
+    .day-num {
+        font-size:27px;
+        font-weight:950;
+        color:#111827;
+        margin:2px 0 9px 0;
+        letter-spacing:-.8px;
+    }
+
+    /* Botões principais — toque showgirl sem perder cara de estudo */
+    div[data-testid="stButton"] button,
+    div[data-testid="stFormSubmitButton"] button {
+        border-radius: 16px !important;
+        border: 0 !important;
+        background: linear-gradient(135deg,#6D5DF6 0%, #F472B6 58%, #F6C453 130%) !important;
+        color:#FFFFFF !important;
+        font-weight: 950 !important;
+        padding: 0.66rem 1.12rem !important;
+        box-shadow: 0 14px 28px rgba(109,93,246,.18) !important;
+        letter-spacing:-.1px;
+    }
+
+    div[data-testid="stButton"] button:hover,
+    div[data-testid="stFormSubmitButton"] button:hover {
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+        color:#FFFFFF !important;
+        box-shadow: 0 18px 34px rgba(244,114,182,.22) !important;
+    }
+
+    /* Inputs/tabelas */
+    [data-testid="stDataFrame"] {
+        border-radius: 18px;
+        overflow: hidden;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        background: rgba(255,255,255,.52);
+        padding: 6px;
+        border-radius: 18px;
+        border:1px solid #ECE7DE;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 14px;
+        padding: 9px 17px;
+        background: transparent;
+        font-weight:900;
+        color:#4B5563;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #F5F3FF, #FFF7ED) !important;
+        color:#111827 !important;
+        box-shadow: 0 8px 18px rgba(17,24,39,.05);
+    }
+
+    @media (max-width: 900px) {
+        .study-art { display:none; }
+        .hero h1 { font-size:29px; }
+        .topbar { flex-direction:column; align-items:flex-start; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 # ============================================================
 # Utilidades
@@ -576,6 +978,71 @@ def load_provas():
     return df
 
 
+
+def normalize_text(value):
+    return str(value or "").strip()
+
+
+def get_color_for_subject(subject):
+    return SUBJECT_COLORS.get(normalize_text(subject), "#6B7280")
+
+
+def get_color_for_area(area):
+    text = normalize_text(area)
+    for key, color in AREA_COLORS.items():
+        if key.lower() in text.lower():
+            return color
+    return "#6B7280"
+
+
+def subject_badge(subject):
+    color = get_color_for_subject(subject)
+    return f'<span class="subject-pill" style="background:{color}1F;color:{color};border:1px solid {color}38;">{subject}</span>' 
+
+
+def load_planejamento_provas():
+    """Une Cronograma_Provas com Provas_Cadastradas.
+    Assim, quando você cadastra uma prova manualmente para hoje, ela aparece na Home e na semana.
+    """
+    cron = load_cronograma().copy()
+    provas = load_provas().copy()
+    frames = []
+    if not cron.empty:
+        frames.append(cron)
+    if not provas.empty:
+        manual = pd.DataFrame()
+        manual["ID_Atividade"] = provas["ID_Prova"].astype(str)
+        manual["Data"] = provas["Data_Prevista"].apply(format_date_br)
+        manual["Data_dt"] = provas["Data_dt"]
+        manual["Dia"] = manual["Data_dt"].apply(lambda x: nice_day_name(x) if pd.notna(x) else "")
+        manual["Semana"] = ""
+        manual["Tipo"] = provas["Tipo"].astype(str)
+        manual["Área"] = provas["Área"].astype(str)
+        manual["Atividade"] = provas["Nome_Prova"].astype(str)
+        manual["Prova"] = provas["Nome_Prova"].astype(str)
+        manual["Questões"] = provas["Total_Questões"].apply(lambda n: f"1-{int(n)}" if pd.notna(n) and int(n) > 0 else "")
+        manual["Status"] = provas["Status"].replace("", "Pendente")
+        manual["Tempo_Estimado"] = ""
+        manual["Meta_Acertos"] = ""
+        manual["Observações"] = "Cadastrada em Provas_Cadastradas"
+        manual = manual[SHEET_HEADERS["Cronograma_Provas"] + ["Data_dt"]]
+        frames.append(manual)
+    if not frames:
+        base = pd.DataFrame(columns=SHEET_HEADERS["Cronograma_Provas"] + ["Data_dt"])
+        return base
+    combined = pd.concat(frames, ignore_index=True)
+    combined["Data_dt"] = combined["Data_dt"].apply(parse_google_sheet_date)
+    combined = combined.dropna(subset=["Data_dt"], how="all")
+    combined = combined.sort_values(["Data_dt", "Área", "Atividade"])
+    combined = combined.drop_duplicates(subset=["ID_Atividade"], keep="first")
+    return combined
+
+
+def card_header(title, subtitle=""):
+    st.markdown(f'<div class="section-title">{title}</div>', unsafe_allow_html=True)
+    if subtitle:
+        st.markdown(f'<div class="section-sub">{subtitle}</div>', unsafe_allow_html=True)
+
 def load_respostas():
     df = load_sheet_df("Respostas_Simulados")
     if not df.empty:
@@ -730,7 +1197,7 @@ def show_topbar(title, subtitle=""):
                 <div class="page-title">{title}</div>
                 <div class="page-subtitle">{subtitle}</div>
             </div>
-            <div class="date-pill">📅 {date.today().strftime('%d/%m/%Y')}</div>
+            <div class="date-pill">Hoje • {date.today().strftime('%d/%m/%Y')}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -750,6 +1217,50 @@ def metric_card(title, value, desc=""):
     )
 
 
+def task_card(title, meta="", badge_html="", color="#8B5CF6"):
+    st.markdown(
+        f"""
+        <div class="task-card" style="border-left:5px solid {color};">
+            <div class="task-line">
+                <div>
+                    <div class="task-title">{title}</div>
+                    <div class="task-meta">{meta}</div>
+                </div>
+                <div>{badge_html}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+def apply_plot_style(fig, height=340):
+    """Aplica uma identidade visual mais refinada aos gráficos."""
+    fig.update_layout(
+        height=height,
+        margin=dict(l=12, r=12, t=18, b=12),
+        template="plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,251,245,.55)",
+        font=dict(family="Inter, sans-serif", color="#111827"),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.28, xanchor="center", x=0.5),
+    )
+    fig.update_xaxes(
+        showgrid=False,
+        linecolor="#E9E2DA",
+        tickfont=dict(color="#6B7280"),
+        title_font=dict(color="#6B7280"),
+    )
+    fig.update_yaxes(
+        gridcolor="rgba(233,226,218,.75)",
+        linecolor="#E9E2DA",
+        tickfont=dict(color="#6B7280"),
+        title_font=dict(color="#6B7280"),
+    )
+    return fig
+
+
 def quick_nav_button(label, page, key, prefill=None):
     if st.button(label, key=key):
         if prefill:
@@ -759,44 +1270,27 @@ def quick_nav_button(label, page, key, prefill=None):
 
 
 def render_week_cards(cronograma, selected_day=None):
-    """Renderiza a semana usando componentes nativos do Streamlit.
-    Isso evita o erro de aparecer <div class=...> na tela, que acontece em alguns deploys/mobile.
-    """
     monday, sunday = week_bounds(selected_day)
-    week_df = cronograma[(cronograma["Data_dt"] >= monday) & (cronograma["Data_dt"] <= sunday)].copy()
+    week_df = cronograma[(cronograma["Data_dt"] >= monday) & (cronograma["Data_dt"] <= sunday)].copy() if not cronograma.empty else pd.DataFrame()
     cols = st.columns(7)
     for i, col in enumerate(cols):
         d = monday + pd.Timedelta(days=i)
-        day_rows = week_df[week_df["Data_dt"] == d]
-        activity = "Livre"
-        status = "Livre"
-        area = ""
-        prova = ""
-        questoes = ""
-        if not day_rows.empty:
-            first = day_rows.iloc[0]
-            activity = str(first.get("Atividade", "")) or str(first.get("Tipo", "")) or "Atividade"
-            status = str(first.get("Status", "Pendente")) or "Pendente"
-            area = str(first.get("Área", ""))
-            prova = str(first.get("Prova", ""))
-            questoes = str(first.get("Questões", ""))
+        day_rows = week_df[week_df["Data_dt"] == d] if not week_df.empty else pd.DataFrame()
         with col:
-            border_color = "#7C3AED" if d.normalize() == today_ts() else "#E5E7EB"
-            bg = "#F5F3FF" if d.normalize() == today_ts() else "#FFFFFF"
-            st.markdown(
-                f"""
-                <div style="border:1px solid {border_color}; background:{bg}; border-radius:18px; padding:14px; min-height:160px; box-shadow:0 8px 20px rgba(15,23,42,.05);">
-                    <div style="font-size:12px;font-weight:800;color:#475569;text-transform:uppercase;">{nice_day_name(d)[:3]}</div>
-                    <div style="font-size:24px;font-weight:800;color:#0F172A;margin:2px 0 8px 0;">{d.strftime('%d')}</div>
-                    <div style="font-size:13px;color:#334155;line-height:1.35;min-height:46px;">{activity}</div>
-                    <div style="font-size:11px;color:#64748B;margin-top:8px;">{area}</div>
-                    <div style="font-size:11px;color:#64748B;">{prova}</div>
-                    <div style="font-size:11px;color:#64748B;">{questoes}</div>
-                    <div style="margin-top:10px;font-size:12px;color:#64748B;">● {status}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            is_today = d.normalize() == today_ts()
+            st.markdown(f'<div class="week-native-card {"today" if is_today else ""}">', unsafe_allow_html=True)
+            st.markdown(f'<div class="day-name">{nice_day_name(d)[:3]}</div><div class="day-num">{d.strftime("%d")}</div>', unsafe_allow_html=True)
+            if day_rows.empty:
+                st.caption("Livre")
+            else:
+                for idx, (_, row) in enumerate(day_rows.head(2).iterrows()):
+                    area = normalize_text(row.get("Área", ""))
+                    color = get_color_for_area(area)
+                    st.markdown(f'<div style="font-size:12px;font-weight:900;color:{color};margin-bottom:2px;">{area or "Atividade"}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:13px;line-height:1.25;color:#0F172A;margin-bottom:8px;">{normalize_text(row.get("Atividade", ""))}</div>', unsafe_allow_html=True)
+                if len(day_rows) > 2:
+                    st.caption(f"+ {len(day_rows)-2} atividade(s)")
+            st.markdown("</div>", unsafe_allow_html=True)
     st.caption(f"Semana de {format_date_br(monday)} a {format_date_br(sunday)}")
 
 
@@ -804,13 +1298,11 @@ def sidebar_menu():
     with st.sidebar:
         st.markdown(
             """
-            <div style="padding:10px 4px 18px 4px;">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <div style="width:44px;height:44px;border-radius:16px;background:rgba(255,255,255,.20);display:flex;align-items:center;justify-content:center;font-size:24px;">📘</div>
-                    <div>
-                        <div style="font-size:22px;font-weight:900;letter-spacing:-.5px;">StudyProgress</div>
-                        <div style="font-size:12px;opacity:.82;">painel de estudos</div>
-                    </div>
+            <div class="sidebar-brand">
+                <div class="brand-mark">SP</div>
+                <div>
+                    <div class="brand-title">StudyProgress</div>
+                    <div class="brand-subtitle">Foco, provas e revisão</div>
                 </div>
             </div>
             """,
@@ -821,7 +1313,7 @@ def sidebar_menu():
 
         for item in MENU_ITEMS:
             active = st.session_state.get("menu_page") == item
-            label = f"{MENU_ICONS.get(item, '')}  {item}"
+            label = item
             if active:
                 st.markdown('<div class="nav-active">', unsafe_allow_html=True)
             if st.button(label, key=f"nav_{item}"):
@@ -834,7 +1326,7 @@ def sidebar_menu():
             """
             <div class="sidebar-profile">
                 <b>Israel Rodrigues</b><br>
-                Foco • ENEM • Fuvest
+                ENEM • Fuvest • rotina
             </div>
             """,
             unsafe_allow_html=True,
@@ -846,8 +1338,8 @@ def sidebar_menu():
 # Páginas
 # ============================================================
 def page_inicio(all_data):
-    show_topbar("Olá, Israel! 👋", "Seu painel do dia: teoria, provas, pendências e revisões.")
-    cron = load_cronograma()
+    show_topbar("Olá, Israel", "Painel do dia com teoria, provas, pendências e revisões.")
+    cron = load_planejamento_provas()
     teoria = load_cronograma_teoria()
     teoria_hoje = theory_today(teoria)
     erros = load_erros()
@@ -855,94 +1347,135 @@ def page_inicio(all_data):
     pend_antigas = get_pending(all_data)
 
     provas_hoje = cron[cron["Data_dt"] == today_ts()].copy() if not cron.empty else pd.DataFrame()
-    pend_erros_total = len(erros[(erros["Status_Revisao"] != "Concluída")]) if not erros.empty else 0
-    rev_erros_hoje = len(erros[(erros["Status_Revisao"] != "Concluída") & (erros["Proxima_Revisao_dt"] <= today_ts())]) if not erros.empty else 0
-    revisoes_total = len(reviews_antigas) + rev_erros_hoje
-    pendencias_total = len(pend_antigas) + pend_erros_total
+    pend_erros_abertos = erros[(erros["Status_Revisao"] != "Concluída")] if not erros.empty else pd.DataFrame()
+    rev_erros_hoje = erros[(erros["Status_Revisao"] != "Concluída") & (erros["Proxima_Revisao_dt"] <= today_ts())] if not erros.empty else pd.DataFrame()
+    revisoes_total = len(reviews_antigas) + len(rev_erros_hoje)
+    pendencias_total = len(pend_antigas) + len(pend_erros_abertos)
 
     st.markdown(
-        '<div class="hero"><h1>Seu dia de estudos</h1><p>Veja teoria, provas, pendências e revisões sem misturar tudo.</p></div>',
+        """
+        <div class="hero">
+            <h1>Painel de estudo da noite</h1>
+            <p>Teoria, provas, pendências e revisões em um só lugar — com foco, clareza e um pouco de brilho.</p>
+            <div class="study-art">
+                <div class="book-a"><div class="book-line" style="top:22px"></div><div class="book-line" style="top:42px"></div></div>
+                <div class="book-b"><div class="book-line" style="top:24px"></div><div class="book-line" style="top:46px"></div></div>
+                <div class="book-c"><div class="book-line" style="top:26px"></div><div class="book-line" style="top:50px"></div></div>
+                <div class="pencil"></div>
+            </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        metric_card("Teoria hoje", len(teoria_hoje), "matérias planejadas")
-    with c2:
-        metric_card("Provas hoje", len(provas_hoje), "simulados/questões")
-    with c3:
-        metric_card("Pendências", pendencias_total, "em aberto")
-    with c4:
-        metric_card("Revisões", revisoes_total, "para hoje/vencidas")
+    with c1: metric_card("Teoria hoje", len(teoria_hoje), "matérias no cronograma")
+    with c2: metric_card("Provas hoje", len(provas_hoje), "provas, simulados ou listas")
+    with c3: metric_card("Pendências", pendencias_total, "itens em aberto")
+    with c4: metric_card("Revisões", revisoes_total, "vencidas ou para hoje")
 
     st.write("")
     left, right = st.columns([1.05, 1.25])
     with left:
         with st.container(border=True):
-            st.markdown("### 🕒 Cronograma de teoria hoje")
+            card_header("Cronograma de teoria hoje", "Clique para registrar o estudo. A matéria já vai preenchida; o conteúdo você coloca na hora.")
             if teoria_hoje.empty:
-                st.success("Nenhuma matéria de teoria cadastrada para hoje.")
-                quick_nav_button("Montar cronograma de teoria", "Cronograma Teoria", "home_add_teoria")
+                st.info("Nenhuma matéria de teoria cadastrada para hoje.")
+                quick_nav_button("Montar cronograma", "Planejamento", "home_add_teoria")
             else:
                 for _, row in teoria_hoje.iterrows():
                     horario = f"{row.get('Horario_Inicio','')}–{row.get('Horario_Fim','')}".strip("–")
-                    st.markdown(f"**{horario} — {row.get('Materia','')}**")
-                    st.caption(row.get("Observacoes", ""))
+                    materia = row.get("Materia", "")
+                    task_card(f"{horario} — {materia}", row.get("Observacoes", ""), subject_badge(materia), get_color_for_subject(materia))
                     quick_nav_button(
                         "Registrar estudo",
                         "Adicionar",
                         f"reg_teoria_{row.get('ID_Teoria','')}",
-                        prefill={"Materia": row.get("Materia", ""), "Origem": "Cronograma_Teoria"},
+                        prefill={"Materia": materia, "Origem": "Cronograma_Teoria"},
                     )
-                    st.divider()
+                    st.write("")
         with st.container(border=True):
-            st.markdown("### ✅ Provas e simulados hoje")
+            card_header("Provas e simulados hoje", "Aparece tanto o cronograma pronto quanto provas cadastradas manualmente.")
             if provas_hoje.empty:
-                st.success("Nenhuma prova/simulado cadastrado para hoje.")
+                st.info("Nenhuma prova ou simulado marcado para hoje.")
             else:
                 for _, row in provas_hoje.iterrows():
-                    st.markdown(f"**{row.get('Atividade','')}**")
-                    st.caption(f"{row.get('Área','')} • {row.get('Prova','')} • {row.get('Questões','')}")
-                    quick_nav_button("Responder/Começar", "Simulados", f"start_prova_{row.get('ID_Atividade','')}")
-                    st.divider()
+                    area = row.get("Área", "")
+                    meta = f"{row.get('Prova','')} • Questões {row.get('Questões','')}"
+                    task_card(row.get("Atividade", ""), meta, status_badge(row.get("Status", "Pendente")), get_color_for_area(area))
+                    quick_nav_button("Responder", "Simulados", f"start_prova_{row.get('ID_Atividade','')}")
+                    st.write("")
     with right:
         with st.container(border=True):
-            st.markdown("### 📅 Semana de provas")
+            card_header("Semana de provas", "Resumo rápido dos próximos dias.")
             render_week_cards(cron)
 
     st.write("")
     left, right = st.columns(2)
     with left:
         with st.container(border=True):
-            st.markdown("### 🔔 Pendências")
-            proximas = cron[cron["Status"].astype(str).str.lower().isin(["pendente", "fazendo"])] if not cron.empty else pd.DataFrame()
-            proximas = proximas.sort_values("Data_dt").head(4) if not proximas.empty else proximas
-            if proximas.empty and pend_antigas.empty:
+            card_header("Pendências", "Resumo organizado: antigas, provas pendentes e erros abertos.")
+            proximas_provas = cron[cron["Status"].astype(str).str.lower().isin(["pendente", "fazendo"])] if not cron.empty else pd.DataFrame()
+            proximas_provas = proximas_provas.sort_values("Data_dt").head(3) if not proximas_provas.empty else proximas_provas
+            if proximas_provas.empty and pend_antigas.empty and pend_erros_abertos.empty:
                 st.success("Nada pendente no momento.")
             else:
-                for _, row in proximas.iterrows():
-                    st.markdown(f"- **{format_date_br(row['Data_dt'])}** — {row['Atividade']} {status_badge(row['Status'])}", unsafe_allow_html=True)
-                for _, row in pend_antigas.head(4).iterrows():
-                    st.markdown(f"- **{row['Matéria']} — {row['Conteúdo']}** • pendência antiga")
+                for _, row in proximas_provas.iterrows():
+                    task_card(f"{format_date_br(row['Data_dt'])} — {row['Atividade']}", row.get("Área", ""), status_badge(row.get("Status", "Pendente")), get_color_for_area(row.get("Área", "")))
+                for _, row in pend_antigas.head(3).iterrows():
+                    task_card(f"{row['Matéria']} — {row['Conteúdo']}", "pendência antiga", subject_badge(row['Matéria']), get_color_for_subject(row['Matéria']))
+                if not pend_erros_abertos.empty:
+                    st.caption(f"Banco de erros: {len(pend_erros_abertos)} questão(ões) ainda em revisão.")
+            quick_nav_button("Ver pendências", "Pendências", "home_ver_pend")
     with right:
         with st.container(border=True):
-            st.markdown("### 🔁 Revisões para hoje")
-            due = erros[(erros["Status_Revisao"] != "Concluída") & (erros["Proxima_Revisao_dt"] <= today_ts())] if not erros.empty else pd.DataFrame()
-            if due.empty and reviews_antigas.empty:
+            card_header("Revisões para hoje", "Inclui revisões antigas e erros de simulados.")
+            if rev_erros_hoje.empty and reviews_antigas.empty:
                 st.success("Nenhuma revisão vencida.")
-            for _, row in due.head(5).iterrows():
-                st.markdown(f"- **Questão {row['Questão']} — {row['Prova']}** • {row['Tipo_Erro']} {status_badge('Revisar hoje')}", unsafe_allow_html=True)
-            for _, row in reviews_antigas.head(5).iterrows():
-                st.markdown(f"- **{row['Matéria']} — {row['Conteúdo']}** • revisão antiga")
+            else:
+                for _, row in rev_erros_hoje.head(3).iterrows():
+                    task_card(f"Questão {row['Questão']} — {row['Prova']}", row.get("Tipo_Erro", "erro"), status_badge("Revisar hoje"), get_color_for_area(row.get("Área", "")))
+                for _, row in reviews_antigas.head(3).iterrows():
+                    task_card(f"{row['Matéria']} — {row['Conteúdo']}", "revisão antiga", subject_badge(row['Matéria']), get_color_for_subject(row['Matéria']))
+            quick_nav_button("Ver revisões", "Pendências", "home_ver_rev")
 
 
-def page_cronograma_teoria():
-    show_topbar("Cronograma Teoria", "Monte sua rotina fixa por matéria e horário. Você pode alterar quando quiser.")
+def page_planejamento():
+    show_topbar("Planejamento", "Um só lugar para cronograma de teoria, semana de provas e provas cadastradas.")
     teoria = load_cronograma_teoria()
+    cron = load_planejamento_provas()
     dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
 
-    tab1, tab2, tab3 = st.tabs(["Semana", "Adicionar", "Editar/Excluir"])
+    tab1, tab2, tab3 = st.tabs(["Semana", "Cronograma de teoria", "Provas cadastradas"])
+
     with tab1:
+        st.markdown("### Visão semanal")
+        selected = st.date_input("Escolha uma semana", value=date.today(), format="DD/MM/YYYY", key="planejamento_semana")
+        render_week_cards(cron, selected)
+        monday, sunday = week_bounds(selected)
+        week_df = cron[(cron["Data_dt"] >= monday) & (cron["Data_dt"] <= sunday)].sort_values("Data_dt").copy() if not cron.empty else pd.DataFrame()
+        st.write("")
+        left, right = st.columns([1.15, .85])
+        with left:
+            with st.container(border=True):
+                card_header("Atividades da semana", "Provas, simulados e listas cadastradas.")
+                if week_df.empty:
+                    st.info("Sem provas cadastradas nessa semana.")
+                else:
+                    for _, row in week_df.iterrows():
+                        meta = f"{nice_day_name(row['Data_dt'])}, {format_date_br(row['Data_dt'])} • {row.get('Área','')} • Questões {row.get('Questões','')}"
+                        task_card(row.get("Atividade", ""), meta, status_badge(row.get("Status", "Pendente")), get_color_for_area(row.get("Área", "")))
+        with right:
+            with st.container(border=True):
+                card_header("Teoria de hoje", "Atalhos para registrar estudo.")
+                tday = theory_today(teoria)
+                if tday.empty:
+                    st.info("Sem teoria cadastrada para hoje.")
+                else:
+                    for _, row in tday.iterrows():
+                        task_card(f"{row.get('Horario_Inicio','')}–{row.get('Horario_Fim','')} — {row.get('Materia','')}", row.get("Observacoes", ""), subject_badge(row.get("Materia", "")), get_color_for_subject(row.get("Materia", "")))
+
+    with tab2:
         st.markdown("### Rotina semanal de teoria")
         cols = st.columns(7)
         for i, dia in enumerate(dias):
@@ -954,94 +1487,60 @@ def page_cronograma_teoria():
                         st.caption("Livre")
                     else:
                         for _, row in dia_df.iterrows():
+                            materia = row.get("Materia", "")
                             status = str(row.get("Status", "Ativo"))
-                            if status.lower() == "pausado":
-                                st.caption(f"⏸ {row.get('Horario_Inicio','')} {row.get('Materia','')}")
-                            else:
-                                st.markdown(f"**{row.get('Horario_Inicio','')}**")
-                                st.write(row.get("Materia", ""))
-        st.info("Na tela Início, os itens do dia aparecem como atalho para a tela Adicionar, já com a matéria preenchida.")
-
-    with tab2:
-        st.markdown("### Adicionar matéria ao cronograma")
-        with st.form("add_teoria"):
-            c1, c2 = st.columns(2)
-            with c1:
-                dia = st.selectbox("Dia da semana", dias)
-                materia = st.selectbox("Matéria", SUBJECTS)
-                status = st.selectbox("Status", ["Ativo", "Pausado"])
-            with c2:
-                inicio = st.text_input("Horário de início", value="19:00", placeholder="19:00")
-                fim = st.text_input("Horário de fim", value="20:00", placeholder="20:00")
-                obs = st.text_input("Observações", placeholder="opcional")
-            if st.form_submit_button("Adicionar ao cronograma"):
-                append_teoria(dia, inicio, fim, materia, status, obs)
-                st.success("Matéria adicionada ao cronograma de teoria.")
-                st.rerun()
+                            opacity = ".45" if status.lower() == "pausado" else "1"
+                            st.markdown(f'<div style="opacity:{opacity};font-weight:900;color:{get_color_for_subject(materia)};">{row.get("Horario_Inicio","")}–{row.get("Horario_Fim","")}</div>', unsafe_allow_html=True)
+                            st.write(materia)
+        st.divider()
+        left, right = st.columns([.95, 1.05])
+        with left:
+            with st.container(border=True):
+                card_header("Adicionar matéria ao cronograma")
+                with st.form("add_teoria"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        dia = st.selectbox("Dia da semana", dias)
+                        materia = st.selectbox("Matéria", SUBJECTS)
+                        status = st.selectbox("Status", ["Ativo", "Pausado"])
+                    with c2:
+                        inicio = st.text_input("Horário de início", value="19:00", placeholder="19:00")
+                        fim = st.text_input("Horário de fim", value="20:00", placeholder="20:00")
+                        obs = st.text_input("Observações", placeholder="opcional")
+                    if st.form_submit_button("Adicionar"):
+                        append_teoria(dia, inicio, fim, materia, status, obs)
+                        st.success("Matéria adicionada ao cronograma.")
+                        st.rerun()
+        with right:
+            with st.container(border=True):
+                card_header("Editar ou excluir")
+                if teoria.empty:
+                    st.info("Nenhum item cadastrado ainda.")
+                else:
+                    options = {row["ID_Teoria"]: f"{row['Dia_Semana']} • {row['Horario_Inicio']}–{row['Horario_Fim']} • {row['Materia']}" for _, row in teoria.iterrows()}
+                    selected_id = st.selectbox("Escolha o item", list(options), format_func=lambda rid: options[rid])
+                    selected = teoria[teoria["ID_Teoria"] == selected_id].iloc[0]
+                    with st.form(f"edit_teoria_{selected_id}"):
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            dia = st.selectbox("Dia", dias, index=dias.index(selected["Dia_Semana"]) if selected["Dia_Semana"] in dias else 0)
+                            materia = st.selectbox("Matéria", SUBJECTS, index=SUBJECTS.index(selected["Materia"]) if selected["Materia"] in SUBJECTS else 0)
+                            status = st.selectbox("Status", ["Ativo", "Pausado"], index=1 if selected["Status"].lower() == "pausado" else 0)
+                        with c2:
+                            inicio = st.text_input("Horário início", value=str(selected["Horario_Inicio"]))
+                            fim = st.text_input("Horário fim", value=str(selected["Horario_Fim"]))
+                            obs = st.text_input("Observações", value=str(selected.get("Observacoes", "")))
+                        if st.form_submit_button("Salvar alterações"):
+                            update_teoria(selected_id, dia, inicio, fim, materia, status, obs)
+                            st.success("Cronograma atualizado.")
+                            st.rerun()
+                    confirm = st.checkbox("Confirmo que quero excluir este item.", key=f"conf_del_teo_{selected_id}")
+                    if st.button("Excluir", disabled=not confirm, key=f"del_teo_{selected_id}"):
+                        delete_teoria(selected_id)
+                        st.rerun()
 
     with tab3:
-        st.markdown("### Editar ou excluir")
-        if teoria.empty:
-            st.info("Nenhum item cadastrado ainda.")
-            return
-        options = {
-            row["ID_Teoria"]: f"{row['Dia_Semana']} • {row['Horario_Inicio']}–{row['Horario_Fim']} • {row['Materia']}"
-            for _, row in teoria.iterrows()
-        }
-        selected_id = st.selectbox("Escolha o item", list(options), format_func=lambda rid: options[rid])
-        selected = teoria[teoria["ID_Teoria"] == selected_id].iloc[0]
-        with st.form(f"edit_teoria_{selected_id}"):
-            c1, c2 = st.columns(2)
-            with c1:
-                dia = st.selectbox("Dia", dias, index=dias.index(selected["Dia_Semana"]) if selected["Dia_Semana"] in dias else 0)
-                materia = st.selectbox("Matéria", SUBJECTS, index=SUBJECTS.index(selected["Materia"]) if selected["Materia"] in SUBJECTS else 0)
-                status = st.selectbox("Status", ["Ativo", "Pausado"], index=1 if selected["Status"].lower() == "pausado" else 0)
-            with c2:
-                inicio = st.text_input("Horário início", value=str(selected["Horario_Inicio"]))
-                fim = st.text_input("Horário fim", value=str(selected["Horario_Fim"]))
-                obs = st.text_input("Observações", value=str(selected.get("Observacoes", "")))
-            if st.form_submit_button("Salvar alterações"):
-                update_teoria(selected_id, dia, inicio, fim, materia, status, obs)
-                st.success("Cronograma atualizado.")
-                st.rerun()
-        with st.expander("Excluir item"):
-            confirm = st.checkbox("Confirmo que quero excluir este item.", key=f"conf_del_teo_{selected_id}")
-            if st.button("Excluir", disabled=not confirm, key=f"del_teo_{selected_id}"):
-                delete_teoria(selected_id)
-                st.rerun()
-
-
-def page_semana():
-    show_topbar("Semana", "Cronograma horizontal com o que fazer hoje e nos próximos dias.")
-    cron = load_cronograma()
-    if cron.empty:
-        st.warning("A aba Cronograma_Provas está vazia. Cole o cronograma que eu enviei na planilha.")
-        return
-    selected = st.date_input("Escolha uma semana", value=date.today(), format="DD/MM/YYYY")
-    render_week_cards(cron, selected)
-    monday, sunday = week_bounds(selected)
-    week_df = cron[(cron["Data_dt"] >= monday) & (cron["Data_dt"] <= sunday)].sort_values("Data_dt").copy()
-    st.write("")
-    st.markdown("### Detalhes da semana")
-    if week_df.empty:
-        st.info("Sem atividades cadastradas nessa semana.")
-        return
-    for _, row in week_df.iterrows():
-        with st.container(border=True):
-            c1, c2, c3, c4 = st.columns([1.3, 2.2, 1, 1])
-            with c1:
-                st.markdown(f"**{nice_day_name(row['Data_dt'])} — {format_date_br(row['Data_dt'])}**")
-                st.markdown(area_badge(row.get("Área", "")), unsafe_allow_html=True)
-            with c2:
-                st.markdown(f"**{row.get('Atividade', '')}**")
-                st.caption(f"Prova: {row.get('Prova', '')} • Questões: {row.get('Questões', '')} • {row.get('Tempo_Estimado', '')}")
-            with c3:
-                st.markdown(status_badge(row.get("Status", "Pendente")), unsafe_allow_html=True)
-            with c4:
-                if row.get("Status") != "Feito":
-                    if st.button("Marcar feito", key=f"feito_{row['ID_Atividade']}"):
-                        update_status_by_id("Cronograma_Provas", "ID_Atividade", row["ID_Atividade"], "Feito")
-                        st.rerun()
+        page_provas_cadastradas(internal=True)
 
 
 def page_simulados():
@@ -1192,33 +1691,84 @@ def page_pendencias(all_data):
 
 
 def page_desempenho(all_data):
-    show_topbar("Desempenho", "Resumo dos estudos e simulados.")
+    show_topbar("Desempenho", "Leitura visual das horas, questões, acertos e erros.")
     correcoes = load_correcoes()
+    erros = load_erros()
+
+    total_horas = round(all_data["Tempo (h)"].sum(), 1) if not all_data.empty else 0
+    total_questoes = int(all_data["Exercícios"].sum()) if not all_data.empty else 0
+    acertos_reg = int(all_data["Acertos"].sum()) if not all_data.empty else 0
+    taxa_reg = round(acertos_reg / total_questoes * 100) if total_questoes else 0
     c1, c2, c3, c4 = st.columns(4)
-    with c1: metric_card("Horas", f"{round(all_data['Tempo (h)'].sum(), 1)}h" if not all_data.empty else "0h", "registradas")
-    with c2: metric_card("Questões", int(all_data["Exercícios"].sum()) if not all_data.empty else 0, "registros")
-    with c3:
-        if not correcoes.empty:
-            acertos = int((correcoes["Resultado"] == "Acertei").sum())
-            total = len(correcoes)
-            metric_card("Acertos simulados", f"{round(acertos/total*100)}%", f"{acertos}/{total}")
-        else:
-            metric_card("Acertos simulados", "0%", "sem correções")
-    with c4: metric_card("Erros no banco", len(load_erros()), "para revisar")
+    with c1: metric_card("Horas registradas", f"{total_horas}h", "tempo total")
+    with c2: metric_card("Questões", total_questoes, "exercícios feitos")
+    with c3: metric_card("Taxa de acertos", f"{taxa_reg}%", f"{acertos_reg}/{total_questoes}")
+    with c4: metric_card("Erros no banco", len(erros), "questões para revisar")
+
     st.write("")
     left, right = st.columns(2)
     with left:
-        st.markdown("### Horas por data")
-        evo = all_data.dropna(subset=["Data"]).groupby("Data", as_index=False)["Tempo (h)"].sum() if not all_data.empty else pd.DataFrame()
-        if evo.empty: st.info("Sem dados suficientes.")
-        else: st.line_chart(evo, x="Data", y="Tempo (h)", height=300)
+        with st.container(border=True):
+            card_header("Horas por data")
+            evo = all_data.dropna(subset=["Data"]).groupby("Data", as_index=False)["Tempo (h)"].sum() if not all_data.empty else pd.DataFrame()
+            if evo.empty:
+                st.info("Sem dados suficientes.")
+            elif px is not None:
+                fig = px.area(evo, x="Data", y="Tempo (h)", markers=True)
+                fig.update_traces(line_color="#8B5CF6", fillcolor="rgba(244,114,182,.18)", marker=dict(size=8, color="#F6C453", line=dict(width=2, color="#8B5CF6")))
+                fig = apply_plot_style(fig, 350)
+                fig.update_layout(xaxis_title="", yaxis_title="Horas")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.line_chart(evo, x="Data", y="Tempo (h)", height=320)
     with right:
-        st.markdown("### Erros por tipo")
-        erros = load_erros()
-        if erros.empty: st.info("Sem erros registrados.")
-        else:
-            grp = erros.groupby("Tipo_Erro", as_index=False).size().rename(columns={"size": "Total"})
-            st.bar_chart(grp, x="Tipo_Erro", y="Total", height=300)
+        with st.container(border=True):
+            card_header("Horas por matéria")
+            subj = all_data.groupby("Matéria", as_index=False)["Tempo (h)"].sum().sort_values("Tempo (h)", ascending=False) if not all_data.empty else pd.DataFrame()
+            if subj.empty:
+                st.info("Sem dados suficientes.")
+            elif px is not None:
+                colors = {m: SUBJECT_COLORS.get(m, "#64748B") for m in subj["Matéria"]}
+                fig = px.bar(subj, x="Matéria", y="Tempo (h)", color="Matéria", color_discrete_map=colors)
+                fig = apply_plot_style(fig, 350)
+                fig.update_layout(showlegend=False, xaxis_title="", yaxis_title="Horas")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.bar_chart(subj, x="Matéria", y="Tempo (h)", height=320)
+
+    left, right = st.columns(2)
+    with left:
+        with st.container(border=True):
+            card_header("Acertos por matéria")
+            if all_data.empty or int(all_data["Exercícios"].sum()) == 0:
+                st.info("Sem exercícios registrados.")
+            else:
+                acc = all_data.groupby("Matéria", as_index=False).agg({"Exercícios":"sum", "Acertos":"sum"})
+                acc = acc[acc["Exercícios"] > 0]
+                acc["Taxa"] = (acc["Acertos"] / acc["Exercícios"] * 100).round(1)
+                if px is not None and not acc.empty:
+                    fig = px.bar(acc.sort_values("Taxa", ascending=False), x="Matéria", y="Taxa", color="Matéria", color_discrete_map={m: SUBJECT_COLORS.get(m, "#64748B") for m in acc["Matéria"]})
+                    fig = apply_plot_style(fig, 350)
+                    fig.update_layout(showlegend=False, xaxis_title="", yaxis_title="Taxa (%)")
+                    fig.add_hline(y=70, line_dash="dot", line_color="#F6C453", annotation_text="Meta 70%", annotation_position="top left")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.dataframe(acc, use_container_width=True, hide_index=True)
+    with right:
+        with st.container(border=True):
+            card_header("Erros por tipo")
+            if erros.empty or erros["Tipo_Erro"].replace("", pd.NA).dropna().empty:
+                st.info("Sem erros registrados.")
+            else:
+                grp = erros.groupby("Tipo_Erro", as_index=False).size().rename(columns={"size": "Total"})
+                if px is not None:
+                    fig = px.pie(grp, names="Tipo_Erro", values="Total", hole=.58, color_discrete_sequence=["#8B5CF6", "#F472B6", "#F6C453", "#14B8A6", "#FB7185", "#38BDF8"])
+                    fig.update_traces(textposition="inside", textinfo="percent+label", marker=dict(line=dict(color="#FFF7ED", width=3)))
+                    fig = apply_plot_style(fig, 350)
+                    fig.update_layout(legend_title_text="", annotations=[dict(text="Erros", x=.5, y=.5, font_size=18, showarrow=False, font_color="#111827")])
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.bar_chart(grp, x="Tipo_Erro", y="Total", height=320)
 
 
 def page_adicionar():
@@ -1259,8 +1809,9 @@ def page_adicionar():
                 st.rerun()
 
 
-def page_provas_cadastradas():
-    show_topbar("Provas Cadastradas", "Lista das provas em ordem para você não precisar pensar no dia.")
+def page_provas_cadastradas(internal=False):
+    if not internal:
+        show_topbar("Provas Cadastradas", "Lista das provas em ordem para você não precisar pensar no dia.")
     provas = load_provas()
     if provas.empty:
         st.info("Aba Provas_Cadastradas vazia.")
@@ -1357,10 +1908,8 @@ page = sidebar_menu()
 
 if page == "Início":
     page_inicio(all_data)
-elif page == "Semana":
-    page_semana()
-elif page == "Cronograma Teoria":
-    page_cronograma_teoria()
+elif page == "Planejamento":
+    page_planejamento()
 elif page == "Simulados":
     page_simulados()
 elif page == "Correção":
@@ -1373,7 +1922,5 @@ elif page == "Desempenho":
     page_desempenho(all_data)
 elif page == "Adicionar":
     page_adicionar()
-elif page == "Provas Cadastradas":
-    page_provas_cadastradas()
 else:
     page_subject(all_data, page)

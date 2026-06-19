@@ -1,4 +1,5 @@
 import uuid
+import html
 from datetime import date, datetime, timedelta
 
 import gspread
@@ -510,10 +511,15 @@ st.markdown(
     .week-native-card {
         border:1px solid #ECE7DE;
         border-radius:22px;
-        padding:15px;
-        min-height:160px;
-        background: rgba(255,255,255,.86);
+        padding:15px 14px;
+        min-height:172px;
+        background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(255,251,245,.78));
         box-shadow: 0 13px 28px rgba(17,24,39,.055);
+        display:flex;
+        flex-direction:column;
+        justify-content:flex-start;
+        gap:10px;
+        overflow:hidden;
     }
 
     .week-native-card.today {
@@ -524,19 +530,102 @@ st.markdown(
         box-shadow: 0 18px 40px rgba(246,196,83,.16);
     }
 
+    .week-day-head {
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-start;
+        gap:8px;
+        padding-bottom:8px;
+        border-bottom:1px solid rgba(233,226,218,.78);
+    }
+
     .day-name {
         font-size:12px;
         font-weight:950;
         color:#6B7280;
         text-transform:uppercase;
+        letter-spacing:.35px;
     }
 
     .day-num {
-        font-size:27px;
+        font-size:28px;
         font-weight:950;
         color:#111827;
-        margin:2px 0 9px 0;
+        margin-top:2px;
         letter-spacing:-.8px;
+        line-height:1;
+    }
+
+    .week-today-pill {
+        font-size:10px;
+        font-weight:950;
+        color:#7C2D12;
+        background:#FEF3C7;
+        border:1px solid #FDE68A;
+        border-radius:999px;
+        padding:4px 7px;
+        white-space:nowrap;
+    }
+
+    .week-card-body {
+        display:flex;
+        flex-direction:column;
+        gap:8px;
+        margin-top:2px;
+    }
+
+    .week-task {
+        border-radius:14px;
+        padding:9px 10px;
+        background:rgba(255,255,255,.72);
+        border:1px solid rgba(233,226,218,.86);
+    }
+
+    .week-area {
+        font-size:11px;
+        font-weight:950;
+        text-transform:uppercase;
+        line-height:1.15;
+        margin-bottom:3px;
+    }
+
+    .week-activity {
+        font-size:13px;
+        font-weight:850;
+        color:#111827;
+        line-height:1.25;
+        word-break:break-word;
+    }
+
+    .week-status {
+        display:inline-block;
+        margin-top:7px;
+        padding:3px 7px;
+        border-radius:999px;
+        font-size:10px;
+        font-weight:950;
+        background:#F5F3FF;
+        color:#6D5DF6;
+    }
+
+    .week-empty {
+        color:#6B7280;
+        font-size:14px;
+        font-weight:850;
+        margin-top:8px;
+    }
+
+    .week-sub {
+        color:#9CA3AF;
+        font-size:12px;
+        margin-top:-4px;
+    }
+
+    .week-more {
+        font-size:12px;
+        color:#6B7280;
+        font-weight:800;
+        margin-top:2px;
     }
 
     /* Botões principais — toque showgirl sem perder cara de estudo */
@@ -1270,29 +1359,64 @@ def quick_nav_button(label, page, key, prefill=None):
 
 
 def render_week_cards(cronograma, selected_day=None):
+    """Renderiza a semana com tudo dentro do próprio card do dia.
+
+    O ajuste é visual: antes o HTML abria um card e os componentes do Streamlit
+    eram renderizados fora dele em alguns navegadores, deixando retângulos vazios.
+    Agora cada card é um único bloco HTML completo.
+    """
     monday, sunday = week_bounds(selected_day)
-    week_df = cronograma[(cronograma["Data_dt"] >= monday) & (cronograma["Data_dt"] <= sunday)].copy() if not cronograma.empty else pd.DataFrame()
+    if not cronograma.empty:
+        week_df = cronograma[(cronograma["Data_dt"] >= monday) & (cronograma["Data_dt"] <= sunday)].copy()
+    else:
+        week_df = pd.DataFrame()
+
     cols = st.columns(7)
     for i, col in enumerate(cols):
         d = monday + pd.Timedelta(days=i)
         day_rows = week_df[week_df["Data_dt"] == d] if not week_df.empty else pd.DataFrame()
-        with col:
-            is_today = d.normalize() == today_ts()
-            st.markdown(f'<div class="week-native-card {"today" if is_today else ""}">', unsafe_allow_html=True)
-            st.markdown(f'<div class="day-name">{nice_day_name(d)[:3]}</div><div class="day-num">{d.strftime("%d")}</div>', unsafe_allow_html=True)
-            if day_rows.empty:
-                st.caption("Livre")
-            else:
-                for idx, (_, row) in enumerate(day_rows.head(2).iterrows()):
-                    area = normalize_text(row.get("Área", ""))
-                    color = get_color_for_area(area)
-                    st.markdown(f'<div style="font-size:12px;font-weight:900;color:{color};margin-bottom:2px;">{area or "Atividade"}</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div style="font-size:13px;line-height:1.25;color:#0F172A;margin-bottom:8px;">{normalize_text(row.get("Atividade", ""))}</div>', unsafe_allow_html=True)
-                if len(day_rows) > 2:
-                    st.caption(f"+ {len(day_rows)-2} atividade(s)")
-            st.markdown("</div>", unsafe_allow_html=True)
-    st.caption(f"Semana de {format_date_br(monday)} a {format_date_br(sunday)}")
+        is_today = d.normalize() == today_ts()
+        today_pill = '<span class="week-today-pill">HOJE</span>' if is_today else ''
 
+        if day_rows.empty:
+            body_html = '<div class="week-empty">Livre</div><div class="week-sub">Sem atividade marcada</div>'
+        else:
+            task_parts = []
+            for _, row in day_rows.head(3).iterrows():
+                area_raw = normalize_text(row.get("Área", "")) or "Atividade"
+                atividade_raw = normalize_text(row.get("Atividade", "")) or normalize_text(row.get("Prova", "")) or "Atividade cadastrada"
+                status_raw = normalize_text(row.get("Status", "Pendente")) or "Pendente"
+                color = get_color_for_area(area_raw)
+                task_parts.append(
+                    f'''
+                    <div class="week-task" style="border-left:4px solid {color};">
+                        <div class="week-area" style="color:{color};">{html.escape(area_raw)}</div>
+                        <div class="week-activity">{html.escape(atividade_raw)}</div>
+                        <span class="week-status">{html.escape(status_raw)}</span>
+                    </div>
+                    '''
+                )
+            if len(day_rows) > 3:
+                task_parts.append(f'<div class="week-more">+ {len(day_rows)-3} atividade(s)</div>')
+            body_html = "".join(task_parts)
+
+        card_class = "week-native-card today" if is_today else "week-native-card"
+        card_html = f'''
+        <div class="{card_class}">
+            <div class="week-day-head">
+                <div>
+                    <div class="day-name">{html.escape(nice_day_name(d)[:3])}</div>
+                    <div class="day-num">{d.strftime("%d")}</div>
+                </div>
+                {today_pill}
+            </div>
+            <div class="week-card-body">{body_html}</div>
+        </div>
+        '''
+        with col:
+            st.markdown(card_html, unsafe_allow_html=True)
+
+    st.caption(f"Semana de {format_date_br(monday)} a {format_date_br(sunday)}")
 
 def sidebar_menu():
     with st.sidebar:

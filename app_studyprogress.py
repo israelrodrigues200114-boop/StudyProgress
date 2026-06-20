@@ -1,10 +1,12 @@
 import uuid
 import html
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import gspread
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     import plotly.express as px
@@ -27,6 +29,16 @@ st.set_page_config(
 )
 
 SPREADSHEET_NAME = "FutureEng_V4"
+APP_TIMEZONE = ZoneInfo("America/Sao_Paulo")
+
+def today_date():
+    """Data de hoje no Brasil/São Paulo. Evita o Streamlit Cloud usar UTC e virar o dia antes da meia-noite daqui."""
+    return datetime.now(APP_TIMEZONE).date()
+
+def now_br():
+    """Agora no fuso do Brasil/São Paulo."""
+    return datetime.now(APP_TIMEZONE)
+
 WORKSHEET_NAME = "Registros"
 
 # --------- Sistema antigo: Registros ---------
@@ -719,21 +731,26 @@ def connect_to_sheet():
     return get_spreadsheet().worksheet(WORKSHEET_NAME)
 
 
+@st.cache_resource
+def get_worksheet_cached(name):
+    """Retorna a aba sem fazer leituras extras de cabeçalho a cada rerun."""
+    spreadsheet = get_spreadsheet()
+    return spreadsheet.worksheet(name)
+
+
 def get_or_create_ws(name, headers):
     spreadsheet = get_spreadsheet()
     try:
-        ws = spreadsheet.worksheet(name)
-    except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=name, rows=1000, cols=max(len(headers), 10))
-        ws.update("A1", [headers])
-        return ws
-    current = ws.row_values(1)
-    if current[: len(headers)] != headers:
-        if not any(current):
+        return get_worksheet_cached(name)
+    except Exception:
+        try:
+            ws = spreadsheet.worksheet(name)
+            return ws
+        except gspread.WorksheetNotFound:
+            ws = spreadsheet.add_worksheet(title=name, rows=1000, cols=max(len(headers), 10))
             ws.update("A1", [headers])
-        else:
-            st.warning(f"A aba {name} existe, mas o cabeçalho não está igual ao esperado. Confira antes de usar.")
-    return ws
+            get_worksheet_cached.clear()
+            return ws
 
 
 def new_id(prefix="ID"):
@@ -802,27 +819,53 @@ def format_time_hours_for_sheet(value):
 
 
 def today_ts():
-    return pd.Timestamp(date.today()).normalize()
+    return pd.Timestamp(today_date()).normalize()
 
 
 def clear_all_cache():
+    """Limpa tudo só quando realmente precisa recarregar todas as abas.
+
+Antes o app limpava todos os caches a cada registro salvo. Isso fazia a Home
+reler várias abas do Google Sheets no mesmo minuto e podia estourar a cota.
+"""
     load_data.clear()
     load_sheet_df.clear()
 
 
-@st.cache_data(ttl=10)
+def clear_registros_cache():
+    """Limpa apenas a aba Registros, mantendo cronogramas/provas em cache."""
+    load_data.clear()
+
+
+def clear_aux_cache():
+    """Limpa apenas as abas novas: cronogramas, simulados e banco de erros."""
+    load_sheet_df.clear()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def load_sheet_df(sheet_name):
+    """Carrega uma aba nova com apenas UMA leitura no Sheets.
+
+Evita row_values + get_all_records, que dobrava as leituras e causava erro 429.
+"""
     headers = SHEET_HEADERS[sheet_name]
     ws = get_or_create_ws(sheet_name, headers)
-    records = ws.get_all_records()
-    df = pd.DataFrame(records)
-    if df.empty:
-        df = pd.DataFrame(columns=headers)
+    values = ws.get_all_values()
+    if not values:
+        return pd.DataFrame(columns=headers)
+    sheet_headers = values[0]
+    rows = values[1:]
+    if sheet_headers[: len(headers)] != headers:
+        st.warning(f"Confira o cabeçalho da aba {sheet_name}. O app tentou carregar mesmo assim.")
+    normalized_rows = []
+    for row in rows:
+        row = row + [""] * max(0, len(sheet_headers) - len(row))
+        normalized_rows.append(dict(zip(sheet_headers, row)))
+    df = pd.DataFrame(normalized_rows) if normalized_rows else pd.DataFrame(columns=headers)
     for col in headers:
         if col not in df.columns:
             df[col] = ""
-    df = df[headers]
-    return df
+    return df[headers]
 
 
 def append_rows(sheet_name, rows):
@@ -830,7 +873,7 @@ def append_rows(sheet_name, rows):
         return
     ws = get_or_create_ws(sheet_name, SHEET_HEADERS[sheet_name])
     ws.append_rows(rows, value_input_option="USER_ENTERED")
-    clear_all_cache()
+    clear_aux_cache()
 
 
 def update_status_by_id(sheet_name, id_col, item_id, new_status):
@@ -853,7 +896,7 @@ def update_status_by_id(sheet_name, id_col, item_id, new_status):
 
 
 def week_bounds(any_day=None):
-    base = pd.Timestamp(any_day or date.today()).normalize()
+    base = pd.Timestamp(any_day or today_date()).normalize()
     monday = base - pd.Timedelta(days=base.weekday())
     sunday = monday + pd.Timedelta(days=6)
     return monday, sunday
@@ -897,7 +940,7 @@ def check_sheet_structure(worksheet):
         raise ValueError("A aba Registros deve ter as colunas nesta ordem: " + " | ".join(REGISTROS_COLUMNS))
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_data():
     worksheet = connect_to_sheet()
     check_sheet_structure(worksheet)
@@ -998,39 +1041,39 @@ def save_record(study_date, subject, content, time_hours, exercises, hits, pendi
         build_row_values(study_date, subject, content, time_hours, exercises, hits, pending, observations, uuid.uuid4().hex[:10].upper(), review_done=make_review_state(review_type, 0)),
         value_input_option="RAW",
     )
-    clear_all_cache()
+    clear_registros_cache()
 
 
 def update_record(sheet_row, values):
     worksheet = connect_to_sheet()
     worksheet.update(range_name=f"A{int(sheet_row)}:L{int(sheet_row)}", values=[values], value_input_option="RAW")
-    clear_all_cache()
+    clear_registros_cache()
 
 
 def delete_record(sheet_row):
     worksheet = connect_to_sheet()
     worksheet.delete_rows(int(sheet_row))
-    clear_all_cache()
+    clear_registros_cache()
 
 
 def mark_pending_done(sheet_row):
     worksheet = connect_to_sheet()
     worksheet.update_cell(int(sheet_row), REGISTROS_COLUMNS.index("Pendência feita") + 1, "Sim")
-    clear_all_cache()
+    clear_registros_cache()
 
 
 def mark_review_done(sheet_row, current_state):
     worksheet = connect_to_sheet()
     review_type, current_stage = parse_review_state(current_state)
     if review_type == "Sem revisão":
-        clear_all_cache(); return
+        clear_registros_cache(); return
     next_stage = current_stage + 1
     worksheet.update(
         range_name=f"J{int(sheet_row)}:K{int(sheet_row)}",
-        values=[[date.today().strftime("%d/%m/%Y"), make_review_state(review_type, next_stage)]],
+        values=[[today_date().strftime("%d/%m/%Y"), make_review_state(review_type, next_stage)]],
         value_input_option="USER_ENTERED",
     )
-    clear_all_cache()
+    clear_registros_cache()
 
 
 def open_pending_mask(df):
@@ -1207,7 +1250,7 @@ def update_teoria(item_id, dia, inicio, fim, materia, status, obs):
     for row_idx, row in enumerate(values[1:], start=2):
         if len(row) >= idx["ID_Teoria"] and row[idx["ID_Teoria"] - 1] == item_id:
             ws.update(range_name=f"A{row_idx}:G{row_idx}", values=[[item_id, dia, inicio, fim, materia, status, obs]], value_input_option="RAW")
-            clear_all_cache()
+            clear_aux_cache()
             return True
     return False
 
@@ -1225,7 +1268,7 @@ def delete_teoria(item_id):
     for row_idx, row in enumerate(values[1:], start=2):
         if len(row) >= id_idx and row[id_idx - 1] == item_id:
             ws.delete_rows(row_idx)
-            clear_all_cache()
+            clear_aux_cache()
             return True
     return False
 
@@ -1233,7 +1276,7 @@ def delete_teoria(item_id):
 def proxima_revisao_por_etapa(etapa):
     etapa = int(etapa or 0)
     dias = {0: 1, 1: 7, 2: 30, 3: 60}.get(etapa, 30)
-    return date.today() + timedelta(days=dias)
+    return today_date() + timedelta(days=dias)
 
 
 def salvar_respostas(prova_row, respostas_dict):
@@ -1245,7 +1288,7 @@ def salvar_respostas(prova_row, respostas_dict):
         if str(alt).strip():
             rows.append([
                 new_id("RESP"), id_prova, prova_row["Nome_Prova"], prova_row["Área"], int(questao), alt,
-                date.today().strftime("%d/%m/%Y"),
+                today_date().strftime("%d/%m/%Y"),
             ])
     append_rows("Respostas_Simulados", rows)
 
@@ -1261,7 +1304,7 @@ def salvar_correcoes_e_erros(prova_row, correcao_rows):
             prox = proxima_revisao_por_etapa(etapa)
             error_rows.append([
                 new_id("ERR"), row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10],
-                etapa, prox.strftime("%d/%m/%Y"), "Agendada", date.today().strftime("%d/%m/%Y"), "",
+                etapa, prox.strftime("%d/%m/%Y"), "Agendada", today_date().strftime("%d/%m/%Y"), "",
             ])
     append_rows("Banco_Erros", error_rows)
 
@@ -1286,8 +1329,8 @@ def avancar_revisao_erro(id_erro, acertou=True):
             ws.update_cell(row_idx, idx["Revisao_Etapa"], str(nova_etapa))
             ws.update_cell(row_idx, idx["Proxima_Revisao"], prox.strftime("%d/%m/%Y"))
             ws.update_cell(row_idx, idx["Status_Revisao"], status)
-            ws.update_cell(row_idx, idx["Ultima_Revisao"], date.today().strftime("%d/%m/%Y"))
-            clear_all_cache()
+            ws.update_cell(row_idx, idx["Ultima_Revisao"], today_date().strftime("%d/%m/%Y"))
+            clear_aux_cache()
             return True
     return False
 
@@ -1302,7 +1345,7 @@ def show_topbar(title, subtitle=""):
                 <div class="page-title">{title}</div>
                 <div class="page-subtitle">{subtitle}</div>
             </div>
-            <div class="date-pill">Hoje • {date.today().strftime('%d/%m/%Y')}</div>
+            <div class="date-pill">Hoje • {today_date().strftime('%d/%m/%Y')}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1374,67 +1417,136 @@ def quick_nav_button(label, page, key, prefill=None):
         st.rerun()
 
 
-def render_week_cards(cronograma, selected_day=None):
-    """Renderiza a semana como uma grade HTML única.
+def render_week_cards(cronograma, selected_day=None, teoria=None):
+    """Renderiza a semana com provas + cronograma teórico.
 
-    Importante: não usa st.columns aqui, porque no tablet as colunas ficam estreitas
-    e quebram o texto na vertical. Também não deixa HTML indentado no começo da linha,
-    evitando aparecer </div> como texto no Streamlit.
+    A renderização acontece em um componente HTML único para evitar bugs no celular/tablet:
+    - nada de HTML aparecendo como texto;
+    - nada de palavras quebrando letra por letra;
+    - rolagem horizontal quando a tela for pequena.
     """
     monday, sunday = week_bounds(selected_day)
-    if not cronograma.empty:
+    if cronograma is not None and not cronograma.empty:
         week_df = cronograma[(cronograma["Data_dt"] >= monday) & (cronograma["Data_dt"] <= sunday)].copy()
     else:
         week_df = pd.DataFrame()
 
+    if teoria is not None and not teoria.empty:
+        teoria_df = teoria[teoria["Status"].astype(str).str.lower().isin(["ativo", "", "pendente"])].copy()
+    else:
+        teoria_df = pd.DataFrame()
+
+    day_map = {
+        "segunda": "Segunda", "terça": "Terça", "terca": "Terça", "quarta": "Quarta",
+        "quinta": "Quinta", "sexta": "Sexta", "sábado": "Sábado", "sabado": "Sábado", "domingo": "Domingo",
+    }
+
     cards = []
     for i in range(7):
         d = monday + pd.Timedelta(days=i)
+        dia_nome = nice_day_name(d)
+        dia_norm = dia_nome.lower()
         day_rows = week_df[week_df["Data_dt"] == d] if not week_df.empty else pd.DataFrame()
-        is_today = d.normalize() == today_ts()
-        today_pill = '<span class="week-today-pill">HOJE</span>' if is_today else ''
-
-        if day_rows.empty:
-            body_html = '<div class="week-empty">Livre</div><div class="week-sub">Sem atividade marcada</div>'
+        if not teoria_df.empty:
+            mapped_days = teoria_df["Dia_Semana"].astype(str).str.lower().map(day_map).fillna(teoria_df["Dia_Semana"].astype(str)).str.lower()
+            theory_rows = teoria_df[mapped_days == dia_norm]
         else:
-            task_parts = []
-            for _, row in day_rows.head(3).iterrows():
-                area_raw = normalize_text(row.get("Área", "")) or "Atividade"
-                atividade_raw = normalize_text(row.get("Atividade", "")) or normalize_text(row.get("Prova", "")) or "Atividade cadastrada"
-                status_raw = normalize_text(row.get("Status", "Pendente")) or "Pendente"
-                color = get_color_for_area(area_raw)
-                task_parts.append(
-                    '<div class="week-task" style="border-left:4px solid {color};">'
-                    '<div class="week-area" style="color:{color};">{area}</div>'
-                    '<div class="week-activity">{atividade}</div>'
-                    '<span class="week-status">{status}</span>'
-                    '</div>'.format(
-                        color=color,
-                        area=html.escape(area_raw),
-                        atividade=html.escape(atividade_raw),
-                        status=html.escape(status_raw),
-                    )
+            theory_rows = pd.DataFrame()
+        is_today = d.normalize() == today_ts()
+        today_pill = '<span class="today-pill">HOJE</span>' if is_today else ''
+
+        task_blocks = []
+
+        if not theory_rows.empty:
+            for _, row in theory_rows.sort_values(["Horario_Inicio", "Materia"]).head(3).iterrows():
+                materia = normalize_text(row.get("Materia", "Teoria")) or "Teoria"
+                horario = f"{normalize_text(row.get('Horario_Inicio',''))}–{normalize_text(row.get('Horario_Fim',''))}".strip("–")
+                color = get_color_for_subject(materia)
+                detalhe = "Cronograma de teoria"
+                title = f"{horario} • {materia}" if horario else materia
+                task_blocks.append(
+                    f'''<div class="task theory" style="border-left-color:{color};">
+                        <div class="area" style="color:{color};">TEORIA</div>
+                        <div class="activity">{html.escape(title)}</div>
+                        <div class="detail">{html.escape(detalhe)}</div>
+                    </div>'''
                 )
-            if len(day_rows) > 3:
-                task_parts.append(f'<div class="week-more">+ {len(day_rows)-3} atividade(s)</div>')
-            body_html = "".join(task_parts)
 
-        card_class = "week-native-card today" if is_today else "week-native-card"
-        card_html = (
-            f'<div class="{card_class}">'
-            '<div class="week-day-head">'
-            '<div>'
-            f'<div class="day-name">{html.escape(nice_day_name(d)[:3])}</div>'
-            f'<div class="day-num">{d.strftime("%d")}</div>'
-            '</div>'
-            f'{today_pill}'
-            '</div>'
-            f'<div class="week-card-body">{body_html}</div>'
-            '</div>'
+        if not day_rows.empty:
+            for _, row in day_rows.head(3).iterrows():
+                area = normalize_text(row.get("Área", "")) or "Prova"
+                atividade = normalize_text(row.get("Atividade", "")) or normalize_text(row.get("Prova", "")) or "Atividade cadastrada"
+                prova = normalize_text(row.get("Prova", ""))
+                questoes = normalize_text(row.get("Questões", ""))
+                status = normalize_text(row.get("Status", "Pendente")) or "Pendente"
+                color = get_color_for_area(area)
+                detalhe_parts = [p for p in [prova if prova and prova != atividade else "", f"Questões {questoes}" if questoes else ""] if p]
+                detail = " • ".join(detalhe_parts)
+                task_blocks.append(
+                    f'''<div class="task prova" style="border-left-color:{color};">
+                        <div class="area" style="color:{color};">{html.escape(area)}</div>
+                        <div class="activity">{html.escape(atividade)}</div>
+                        <div class="detail">{html.escape(detail)}</div>
+                        <span class="status">{html.escape(status)}</span>
+                    </div>'''
+                )
+
+        total_extra = max(0, len(day_rows) - 3) + max(0, len(theory_rows) - 3)
+        if total_extra:
+            task_blocks.append(f'<div class="more">+ {total_extra} atividade(s)</div>')
+
+        if not task_blocks:
+            tasks_html = '<div class="free">Livre</div><div class="sub">Sem atividade marcada</div>'
+        else:
+            tasks_html = ''.join(task_blocks)
+
+        active = ' today' if is_today else ''
+        cards.append(
+            f'''<div class="day-card{active}">
+                <div class="head">
+                    <div>
+                        <div class="dow">{html.escape(nice_day_name(d)[:3]).upper()}</div>
+                        <div class="num">{d.strftime('%d')}</div>
+                    </div>
+                    {today_pill}
+                </div>
+                <div class="body">{tasks_html}</div>
+            </div>'''
         )
-        cards.append(card_html)
 
-    st.markdown('<div class="week-grid">' + ''.join(cards) + '</div>', unsafe_allow_html=True)
+    component_html = f"""
+    <!doctype html>
+    <html>
+    <head>
+    <meta charset="utf-8" />
+    <style>
+        * {{ box-sizing: border-box; }}
+        body {{ margin:0; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: transparent; }}
+        .week-wrap {{ width:100%; overflow-x:auto; padding: 4px 0 14px; }}
+        .week-grid {{ display:grid; grid-template-columns: repeat(7, minmax(172px, 1fr)); gap:18px; min-width: 1210px; }}
+        .day-card {{ min-height:244px; border:1px solid #E9E2DA; border-radius:26px; padding:17px; background:rgba(255,255,255,.74); box-shadow:0 18px 38px rgba(17,24,39,.06); }}
+        .day-card.today {{ border:2px solid #F6C453; background:linear-gradient(180deg, rgba(245,243,255,.94), rgba(255,247,237,.92)); }}
+        .head {{ display:flex; justify-content:space-between; gap:10px; align-items:flex-start; padding-bottom:12px; border-bottom:1px solid #EFE7DE; }}
+        .dow {{ font-size:13px; font-weight:900; color:#6B7280; letter-spacing:.4px; }}
+        .num {{ font-size:31px; font-weight:950; color:#0B1026; line-height:1.05; margin-top:6px; }}
+        .today-pill {{ display:inline-flex; align-items:center; padding:5px 9px; border-radius:999px; background:#FFF7ED; color:#92400E; border:1px solid #F6C453; font-size:11px; font-weight:950; }}
+        .body {{ padding-top:13px; min-height:144px; display:flex; flex-direction:column; gap:9px; }}
+        .free {{ color:#6B7280; font-size:15px; font-weight:800; margin-top:8px; }}
+        .sub {{ color:#9CA3AF; font-size:12px; margin-top:4px; line-height:1.45; }}
+        .task {{ border-left:5px solid #8B5CF6; background:rgba(255,255,255,.84); border-radius:18px; padding:10px 11px; box-shadow:0 10px 22px rgba(17,24,39,.055); overflow:hidden; }}
+        .task.theory {{ background:linear-gradient(135deg, rgba(255,255,255,.92), rgba(245,243,255,.78)); }}
+        .area {{ font-size:11px; font-weight:950; text-transform:uppercase; letter-spacing:.2px; white-space:normal; overflow-wrap:break-word; word-break:normal; }}
+        .activity {{ margin-top:4px; font-size:13.5px; font-weight:900; color:#111827; line-height:1.25; white-space:normal; overflow-wrap:break-word; word-break:normal; }}
+        .detail {{ margin-top:3px; font-size:11.5px; color:#6B7280; line-height:1.3; white-space:normal; overflow-wrap:break-word; word-break:normal; }}
+        .status {{ margin-top:8px; display:inline-flex; width:max-content; max-width:100%; padding:5px 9px; border-radius:999px; background:#F5F3FF; color:#6D5DF6; font-size:11px; font-weight:950; }}
+        .more {{ color:#6B7280; font-size:12px; font-weight:800; padding:4px 2px; }}
+        @media (max-width: 900px) {{ .week-grid {{ grid-template-columns: repeat(7, 174px); min-width: 1310px; gap:14px; }} .day-card {{ min-height:252px; }} }}
+    </style>
+    </head>
+    <body><div class="week-wrap"><div class="week-grid">{''.join(cards)}</div></div></body>
+    </html>
+    """
+    components.html(component_html, height=330, scrolling=True)
     st.caption(f"Semana de {format_date_br(monday)} a {format_date_br(sunday)}")
 
 def sidebar_menu():
@@ -1498,8 +1610,8 @@ def page_inicio(all_data):
     st.markdown(
         """
         <div class="hero">
-            <h1>Painel de estudo da noite</h1>
-            <p>Teoria, provas, pendências e revisões em um só lugar — com foco, clareza e um pouco de brilho.</p>
+            <h1>Painel de estudos</h1>
+            <p>Seu cronograma de teoria, provas, pendências e revisões em um só lugar — com foco, clareza e um toque de brilho.</p>
             <div class="study-art">
                 <div class="book-a"><div class="book-line" style="top:22px"></div><div class="book-line" style="top:42px"></div></div>
                 <div class="book-b"><div class="book-line" style="top:24px"></div><div class="book-line" style="top:46px"></div></div>
@@ -1550,8 +1662,8 @@ def page_inicio(all_data):
                     st.write("")
     with right:
         with st.container(border=True):
-            card_header("Semana de provas", "Resumo rápido dos próximos dias.")
-            render_week_cards(cron)
+            card_header("Planejamento da semana", "Resumo rápido de teoria, provas e simulados.")
+            render_week_cards(cron, teoria=teoria)
 
     st.write("")
     left, right = st.columns(2)
@@ -1593,21 +1705,29 @@ def page_planejamento():
 
     with tab1:
         st.markdown("### Visão semanal")
-        selected = st.date_input("Escolha uma semana", value=date.today(), format="DD/MM/YYYY", key="planejamento_semana")
-        render_week_cards(cron, selected)
+        selected = st.date_input("Escolha uma semana", value=today_date(), format="DD/MM/YYYY", key="planejamento_semana")
+        render_week_cards(cron, selected, teoria=teoria)
         monday, sunday = week_bounds(selected)
         week_df = cron[(cron["Data_dt"] >= monday) & (cron["Data_dt"] <= sunday)].sort_values("Data_dt").copy() if not cron.empty else pd.DataFrame()
+        theory_week_df = teoria[teoria["Status"].astype(str).str.lower().isin(["ativo", "", "pendente"])].copy() if not teoria.empty else pd.DataFrame()
         st.write("")
         left, right = st.columns([1.15, .85])
         with left:
             with st.container(border=True):
-                card_header("Atividades da semana", "Provas, simulados e listas cadastradas.")
-                if week_df.empty:
-                    st.info("Sem provas cadastradas nessa semana.")
+                card_header("Atividades da semana", "Provas, simulados, listas e teoria cadastrada.")
+                if week_df.empty and theory_week_df.empty:
+                    st.info("Sem atividades cadastradas nessa semana.")
                 else:
                     for _, row in week_df.iterrows():
                         meta = f"{nice_day_name(row['Data_dt'])}, {format_date_br(row['Data_dt'])} • {row.get('Área','')} • Questões {row.get('Questões','')}"
                         task_card(row.get("Atividade", ""), meta, status_badge(row.get("Status", "Pendente")), get_color_for_area(row.get("Área", "")))
+                    if not theory_week_df.empty:
+                        st.caption("Cronograma de teoria fixo da semana")
+                        for _, row in theory_week_df.head(10).iterrows():
+                            materia = row.get("Materia", "")
+                            horario = f"{row.get('Horario_Inicio','')}–{row.get('Horario_Fim','')}".strip("–")
+                            meta = f"{row.get('Dia_Semana','')} • {horario}"
+                            task_card(materia, meta, subject_badge(materia), get_color_for_subject(materia))
         with right:
             with st.container(border=True):
                 card_header("Teoria de hoje", "Atalhos para registrar estudo.")
@@ -1699,12 +1819,32 @@ def page_simulados():
         total = int(prova.get("Total_Questões", 45) or 45)
         st.markdown(f"### {prova_nome}")
         st.caption(f"Área: {prova['Área']} • Questões: 1 a {total}")
+        st.info("No celular, mantenha o modo lista ligado para as questões ficarem na ordem correta. No computador, você pode desligar para usar a grade compacta.")
+        modo_lista = st.toggle("Modo celular / lista em ordem", value=True, key=f"modo_lista_{prova['ID_Prova']}")
         with st.form(f"respostas_{prova['ID_Prova']}"):
             respostas = {}
-            cols = st.columns(5)
-            for q in range(1, total + 1):
-                with cols[(q - 1) % 5]:
-                    respostas[q] = st.selectbox(f"Q{q}", ALT_OPTIONS, key=f"resp_{prova['ID_Prova']}_{q}")
+            if modo_lista:
+                for bloco_inicio in range(1, total + 1, 15):
+                    bloco_fim = min(bloco_inicio + 14, total)
+                    st.markdown(f"#### Questões {bloco_inicio} a {bloco_fim}")
+                    for q in range(bloco_inicio, bloco_fim + 1):
+                        c1, c2 = st.columns([.30, .70])
+                        with c1:
+                            st.markdown(f"**Questão {q}**")
+                        with c2:
+                            respostas[q] = st.radio(
+                                "Alternativa",
+                                ALT_OPTIONS,
+                                key=f"resp_{prova['ID_Prova']}_{q}",
+                                horizontal=True,
+                                label_visibility="collapsed",
+                            )
+            else:
+                for linha_inicio in range(1, total + 1, 5):
+                    cols = st.columns(5)
+                    for offset, q in enumerate(range(linha_inicio, min(linha_inicio + 5, total + 1))):
+                        with cols[offset]:
+                            respostas[q] = st.selectbox(f"Q{q}", ALT_OPTIONS, key=f"resp_{prova['ID_Prova']}_{q}")
             submitted = st.form_submit_button("Salvar respostas")
             if submitted:
                 preenchidas = {q: alt for q, alt in respostas.items() if alt}
@@ -1753,7 +1893,7 @@ def page_correcao():
             comentario = conteudo
             rows_corr.append([
                 new_id("COR"), prova["ID_Prova"], prova_nome, prova["Área"], q, r["Sua_Resposta"], gab,
-                resultado_auto, tipo if resultado_auto == "Errei" else "", conteudo, comentario, date.today().strftime("%d/%m/%Y"),
+                resultado_auto, tipo if resultado_auto == "Errei" else "", conteudo, comentario, today_date().strftime("%d/%m/%Y"),
             ])
         submitted = st.form_submit_button("Salvar correção e criar pendências")
         if submitted:
@@ -1929,7 +2069,7 @@ def page_adicionar():
     with st.form("form_adicionar_estudo", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
-            study_date = st.date_input("Data", value=date.today(), format="DD/MM/YYYY")
+            study_date = st.date_input("Data", value=today_date(), format="DD/MM/YYYY")
             subject = st.selectbox("Matéria", SUBJECTS, index=default_index)
             content = st.text_input("Conteúdo estudado", placeholder="Ex.: função afim, ecologia, repertório...")
         with c2:
@@ -1973,7 +2113,7 @@ def page_provas_cadastradas(internal=False):
         with c2:
             tipo = st.text_input("Tipo", value="Prova antiga")
             total = st.number_input("Total de questões", min_value=1, max_value=180, value=45)
-            data_prevista = st.date_input("Data prevista", value=date.today(), format="DD/MM/YYYY")
+            data_prevista = st.date_input("Data prevista", value=today_date(), format="DD/MM/YYYY")
         if st.form_submit_button("Adicionar prova"):
             append_rows("Provas_Cadastradas", [[new_id("PROVA"), nome, area, int(ano), tipo, int(total), data_prevista.strftime("%d/%m/%Y"), "Pendente"]])
             st.success("Prova cadastrada.")
@@ -2005,7 +2145,7 @@ def page_subject(all_data, subject):
     with st.form(f"edit_{selected_id}"):
         e1, e2 = st.columns(2)
         with e1:
-            edit_date = st.date_input("Data do estudo", value=selected["Data"].date() if pd.notna(selected["Data"]) else date.today(), format="DD/MM/YYYY")
+            edit_date = st.date_input("Data do estudo", value=selected["Data"].date() if pd.notna(selected["Data"]) else today_date(), format="DD/MM/YYYY")
             edit_subject = st.selectbox("Matéria", SUBJECTS, index=SUBJECTS.index(selected["Matéria"]) if selected["Matéria"] in SUBJECTS else 0)
             edit_content = st.text_input("Conteúdo estudado", value=selected["Conteúdo"])
         with e2:
@@ -2043,8 +2183,14 @@ def page_subject(all_data, subject):
 try:
     all_data = load_data()
 except Exception as error:
-    st.error("Não consegui carregar os dados. Confira se a aba Registros possui todas as 12 colunas na ordem correta.")
-    st.exception(error)
+    msg = str(error)
+    if "Quota exceeded" in msg or "Read requests" in msg or "429" in msg:
+        st.error("O Google Planilhas bloqueou temporariamente por excesso de leituras. Aguarde 1 a 2 minutos e atualize a página. Esta versão reduz bastante as leituras para evitar esse erro.")
+        with st.expander("Detalhes técnicos"):
+            st.exception(error)
+    else:
+        st.error("Não consegui carregar os dados. Confira se a aba Registros possui todas as 12 colunas na ordem correta.")
+        st.exception(error)
     st.stop()
 
 page = sidebar_menu()

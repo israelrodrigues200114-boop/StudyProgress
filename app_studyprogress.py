@@ -1602,14 +1602,15 @@ def page_inicio(all_data):
     pend_antigas = get_pending(all_data)
 
     provas_hoje = cron[cron["Data_dt"] == today_ts()].copy() if not cron.empty else pd.DataFrame()
-    pend_erros_abertos = erros[
+
+    rev_erros_hoje = erros[
     (erros["Status_Revisao"] != "Concluída") &
     (erros["Proxima_Revisao_dt"] <= today_ts())
-] if not erros.empty else pd.DataFrame()
-    rev_erros_hoje = erros[(erros["Status_Revisao"] != "Concluída") & (erros["Proxima_Revisao_dt"] <= today_ts())] if not erros.empty else pd.DataFrame()
-    revisoes_total = len(reviews_antigas) + len(rev_erros_hoje)
-    pendencias_total = len(pend_antigas) + len(pend_erros_abertos)
+    ] if not erros.empty else pd.DataFrame()
 
+    revisoes_total = len(reviews_antigas) + len(rev_erros_hoje)
+    pendencias_total = len(pend_antigas)
+    
     st.markdown(
         """
         <div class="hero">

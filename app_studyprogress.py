@@ -1600,7 +1600,7 @@ def page_inicio(all_data):
     erros = load_erros()
     reviews_antigas = get_reviews(all_data)
     pend_antigas = get_pending(all_data)
-
+    pend_erros_abertos = erros[erros["Status_Revisao"] != "Concluída"] if not erros.empty else pd.DataFrame()
     provas_hoje = cron[cron["Data_dt"] == today_ts()].copy() if not cron.empty else pd.DataFrame()
 
     rev_erros_hoje = erros[

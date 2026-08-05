@@ -2,3 +2,4 @@ streamlit==1.47.1
 pandas==2.3.1
 gspread==6.2.1
 google-auth==2.40.3
+protobuf<7

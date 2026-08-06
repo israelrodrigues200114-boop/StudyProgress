@@ -722,6 +722,8 @@ st.markdown(
 @st.cache_resource
 def get_spreadsheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    st.write(st.secrets)
+    st.stop()
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     client = gspread.authorize(creds)
     return client.open(SPREADSHEET_NAME)
